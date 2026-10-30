@@ -1,0 +1,2 @@
+# Allow the logged-in user to control lighting on the onn 104-key LED Gaming Keyboard
+KERNEL=="hidraw*", ATTRS{idVendor}=="3938", ATTRS{idProduct}=="1296", MODE="0660", TAG+="uaccess"

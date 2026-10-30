@@ -1,0 +1,28 @@
+[package]
+name = "onn-rgb"
+version = "0.1.0"
+edition = "2021"
+description = "Linux lighting control for the onn 104-key LED Gaming Keyboard (USB 3938:1296)"
+license = "MIT"
+readme = "README.md"
+keywords = ["keyboard", "led", "hid", "onn", "linux"]
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe"]
+
+[dependencies]
+eframe = { version = "0.31", optional = true }
+
+[[bin]]
+name = "onn-rgb"
+path = "src/bin/onn-rgb.rs"
+
+[[bin]]
+name = "onn-rgb-gui"
+path = "src/bin/onn-rgb-gui.rs"
+required-features = ["gui"]
+
+[profile.release]
+strip = true
+lto = true
