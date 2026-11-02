@@ -1,0 +1,14 @@
+# Optional alternative to the XDG autostart entry (systemd distros only).
+# Use one or the other, not both.
+[Unit]
+Description=onn keyboard lighting tray and hotkeys
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=onn-rgb daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

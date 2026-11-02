@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=onn Keyboard Lighting (tray)
+Comment=Tray icon and hotkeys for the onn LED Gaming Keyboard
+Exec=onn-rgb daemon
+Icon=input-keyboard
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

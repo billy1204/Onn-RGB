@@ -1,2 +1,4 @@
 # Allow the logged-in user to control lighting on the onn 104-key LED Gaming Keyboard
-KERNEL=="hidraw*", ATTRS{idVendor}=="3938", ATTRS{idProduct}=="1296", MODE="0660", TAG+="uaccess"
+# systemd/elogind distros use uaccess. On other distros, members of the group
+# below get access instead (create it or change it, e.g. to "users" or "plugdev").
+KERNEL=="hidraw*", ATTRS{idVendor}=="3938", ATTRS{idProduct}=="1296", MODE="0660", GROUP="input", TAG+="uaccess"

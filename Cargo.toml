@@ -8,8 +8,10 @@ readme = "README.md"
 keywords = ["keyboard", "led", "hid", "onn", "linux"]
 
 [features]
-default = ["gui"]
+default = ["gui", "tray"]
 gui = ["dep:eframe", "dep:winit"]
+# System tray (StatusNotifierItem) for `onn-rgb daemon`.
+tray = ["dep:ksni"]
 
 [dependencies]
 # eframe defaults minus accesskit, which pulls in a large D-Bus dependency tree.
@@ -17,6 +19,11 @@ eframe = { version = "0.31", optional = true, default-features = false, features
 # Not used directly: keeps winit's default features (eframe's own `winit/default`
 # can't be selected from here), such as loading libwayland at runtime.
 winit = { version = "0.30", optional = true }
+
+# Pure-Rust D-Bus (zbus) with a small async-io runtime; no libdbus needed.
+ksni = { version = "0.3", optional = true, default-features = false, features = ["blocking", "async-io"] }
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [[bin]]
 name = "onn-rgb"

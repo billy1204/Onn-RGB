@@ -1,0 +1,10 @@
+# Optional: let onn-rgb's daemon read hotkeys from the onn keyboard's input
+# event nodes (read-only; keys are never grabbed). Only needed for
+# `onn-rgb daemon` hotkeys and `onn-rgb listen-keys`.
+#
+# systemd/elogind distros: TAG+="uaccess" gives the user at the local seat
+# access (file must sort before 73-seat-late.rules, hence "71-").
+# Non-systemd distros without elogind: uaccess does nothing; instead add your
+# user to the `input` group (`sudo usermod -aG input $USER`, then log out/in).
+# Note: either way, that user can read every key typed on this keyboard.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="3938", ATTRS{idProduct}=="1296", MODE="0660", GROUP="input", TAG+="uaccess"

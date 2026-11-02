@@ -5,6 +5,13 @@
 //! transaction is wrapped in BEGIN/END packets, and each packet carries a
 //! 16-bit little-endian checksum of bytes 3..64.
 
+pub mod actions;
+pub mod config;
+pub mod daemon;
+pub mod hotkeys;
+#[cfg(feature = "tray")]
+pub mod tray;
+
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
