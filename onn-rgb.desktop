@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=onn Keyboard Lighting
+Comment=Control lighting on the onn LED Gaming Keyboard
+Exec=onn-rgb-gui
+Icon=input-keyboard
+Type=Application
+Categories=Utility;Settings;HardwareSettings;
