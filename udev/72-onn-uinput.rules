@@ -1,0 +1,9 @@
+# Optional: let onn-rgb's daemon create its "onn-rgb passthrough" virtual
+# keyboard (uinput). Needed only to grab the onn keyboard so the Fn key
+# doesn't change the volume. Without it the daemon runs ungrabbed.
+#
+# systemd/elogind distros: uaccess gives the seat user access.
+# Non-systemd without elogind: uaccess does nothing; the GROUP/MODE below let
+# members of `input` use it (sudo usermod -aG input $USER, then re-login).
+# Load the module at boot too: modules-load/onn-rgb.conf -> /etc/modules-load.d/
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput", GROUP="input", MODE="0660"

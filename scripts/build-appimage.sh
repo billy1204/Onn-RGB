@@ -39,7 +39,7 @@ cp "$APPDIR/onn-rgb.desktop" "$APPDIR/usr/share/applications/"
 cp packaging/onn-rgb.svg "$APPDIR/onn-rgb.svg"
 cp packaging/onn-rgb.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
 ln -sf onn-rgb.svg "$APPDIR/.DirIcon"
-cp udev/*.rules packaging/autostart/onn-rgb-daemon.desktop packaging/systemd/onn-rgb.service "$APPDIR/usr/share/onn-rgb/"
+cp udev/*.rules packaging/autostart/onn-rgb-daemon.desktop packaging/systemd/onn-rgb.service modules-load/onn-rgb.conf "$APPDIR/usr/share/onn-rgb/"
 cat > "$APPDIR/AppRun" <<'RUN'
 #!/bin/sh
 # No arguments: launch the GUI. Any arguments: run the CLI (onn-rgb).

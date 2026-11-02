@@ -14,16 +14,20 @@ pub enum Action {
     BrightnessDown,
     SpeedUp,
     SpeedDown,
+    ModeSteady,
+    ModePulse,
 }
 
 impl Action {
-    pub const ALL: [Action; 6] = [
+    pub const ALL: [Action; 8] = [
         Action::CycleMode,
         Action::Toggle,
         Action::BrightnessUp,
         Action::BrightnessDown,
         Action::SpeedUp,
         Action::SpeedDown,
+        Action::ModeSteady,
+        Action::ModePulse,
     ];
 
     pub fn name(self) -> &'static str {
@@ -34,6 +38,8 @@ impl Action {
             Action::BrightnessDown => "brightness-down",
             Action::SpeedUp => "speed-up",
             Action::SpeedDown => "speed-down",
+            Action::ModeSteady => "mode-steady",
+            Action::ModePulse => "mode-pulse",
         }
     }
 
@@ -82,6 +88,8 @@ pub fn next(s: Settings, a: Action, toggle_to: Mode) -> Settings {
         Action::BrightnessDown => n.brightness = s.brightness.saturating_sub(1).min(MAX_BRIGHTNESS),
         Action::SpeedUp => n.speed = (s.speed + 1).min(MAX_SPEED),
         Action::SpeedDown => n.speed = s.speed.saturating_sub(1),
+        Action::ModeSteady => n.mode = Mode::Steady,
+        Action::ModePulse => n.mode = Mode::Pulse,
     }
     n
 }
@@ -89,6 +97,12 @@ pub fn next(s: Settings, a: Action, toggle_to: Mode) -> Settings {
 /// Read the keyboard, apply the action, return the new settings.
 pub fn apply(kb: &mut Keyboard, a: Action) -> Result<Settings> {
     let s = kb.settings()?;
+    apply_from(kb, s, a)
+}
+
+/// Apply an action given known current settings: writes only what changes
+/// (one HID write per action, none if already at a limit).
+pub fn apply_from(kb: &mut Keyboard, s: Settings, a: Action) -> Result<Settings> {
     let n = next(s, a, last_mode());
     if n.mode != s.mode {
         if s.mode != Mode::Off {

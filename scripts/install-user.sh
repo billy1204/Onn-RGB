@@ -14,6 +14,7 @@ mkdir -p "$SHARE" "$HOME/.local/share/applications" "$HOME/.config/systemd/user"
 sed "s|^Exec=onn-rgb daemon|Exec=$BIN daemon|" packaging/autostart/onn-rgb-daemon.desktop > "$SHARE/onn-rgb-daemon.desktop"
 sed "s|^ExecStart=onn-rgb daemon|ExecStart=$BIN daemon|" packaging/systemd/onn-rgb.service > "$HOME/.config/systemd/user/onn-rgb.service"
 cp udev/*.rules "$SHARE/"
+cp modules-load/onn-rgb.conf "$SHARE/"
 if [ $# -eq 0 ]; then cp onn-rgb.desktop "$HOME/.local/share/applications/"; fi
 "$BIN" config >/dev/null
 cat <<MSG

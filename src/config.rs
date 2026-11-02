@@ -1,7 +1,9 @@
 //! `~/.config/onn-rgb/config.toml`: hotkey bindings for `onn-rgb daemon`.
 
 use crate::actions::Action;
-use crate::hotkeys::key_code;
+use crate::fnkeys::FnConfig;
+use crate::hotkeys::{key_code, key_name};
+use std::time::Duration;
 use std::fs;
 use std::path::PathBuf;
 
@@ -26,9 +28,35 @@ speed-down = []
 
 [tray]
 enabled = true
-# Seconds between re-reading the keyboard so the tray follows changes made
-# by the keyboard's own Fn keys, the GUI or the CLI. 0 disables polling.
-poll-seconds = 3
+
+# Fn combos. The keyboard reports Fn as KEY_VOLUMEUP on its second event node;
+# a press arms Fn, which lasts until its release (if release-disarms) or
+# window-ms without a press/repeat. If Fn+Up does nothing, try
+# release-disarms = false.
+[fn]
+key = "KEY_VOLUMEUP"
+window-ms = 400
+release-disarms = true
+# Grab the Fn node and re-emit everything except Fn through a uinput device
+# ("onn-rgb passthrough"), so Fn doesn't change the volume. Needs
+# udev/72-onn-uinput.rules; falls back to ungrabbed if uinput isn't usable.
+grab = true
+# Also grab the main typing node so the arrow etc. of a Fn combo don't reach
+# apps. (Tray: "Block arrow keys during Fn combos".)
+block-combo-keys = false
+
+# Key pressed while Fn is armed -> action. Replaces the defaults if present.
+[fn.keys]
+KEY_UP = "brightness-up"
+KEY_DOWN = "brightness-down"
+KEY_RIGHT = "speed-up"
+KEY_LEFT = "speed-down"
+KEY_INSERT = "cycle-mode"
+KEY_HOME = "mode-steady"
+KEY_PAGEUP = "mode-pulse"
+KEY_DELETE = "toggle"
+KEY_END = "toggle"
+KEY_PAGEDOWN = "cycle-mode"
 "#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,12 +64,21 @@ pub struct Config {
     pub hotkeys_enabled: bool,
     pub bindings: Vec<(u16, Action)>,
     pub tray_enabled: bool,
-    pub poll_seconds: u64,
+    pub fn_cfg: FnConfig,
+    pub grab: bool,
+    pub block_combo_keys: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { hotkeys_enabled: true, bindings: Vec::new(), tray_enabled: true, poll_seconds: 3 }
+        Config {
+            hotkeys_enabled: true,
+            bindings: Vec::new(),
+            tray_enabled: true,
+            fn_cfg: FnConfig::default(),
+            grab: true,
+            block_combo_keys: false,
+        }
     }
 }
 
@@ -84,11 +121,70 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
         if let Some(b) = t.get("enabled").and_then(|v| v.as_bool()) {
             c.tray_enabled = b;
         }
-        if let Some(n) = t.get("poll-seconds").and_then(|v| v.as_integer()) {
-            c.poll_seconds = n.max(0) as u64;
+    }
+    if let Some(f) = table.get("fn").and_then(|v| v.as_table()) {
+        for (k, v) in f {
+            match (k.as_str(), v) {
+                ("key", toml::Value::String(s)) => match key_code(s) {
+                    Some(code) => c.fn_cfg.key = code,
+                    None => warn.push(format!("fn.key: unknown key {s}")),
+                },
+                ("key", toml::Value::Integer(n)) => c.fn_cfg.key = *n as u16,
+                ("window-ms", toml::Value::Integer(n)) => c.fn_cfg.window = Duration::from_millis((*n).clamp(50, 5000) as u64),
+                ("release-disarms", toml::Value::Boolean(b)) => c.fn_cfg.release_disarms = *b,
+                ("grab", toml::Value::Boolean(b)) => c.grab = *b,
+                ("block-combo-keys" | "block_combo_keys", toml::Value::Boolean(b)) => c.block_combo_keys = *b,
+                ("keys", toml::Value::Table(keys)) => {
+                    c.fn_cfg.map.clear();
+                    for (kn, an) in keys {
+                        let code = kn.parse::<u16>().ok().or_else(|| key_code(kn));
+                        let act = an.as_str().and_then(Action::parse);
+                        match (code, act) {
+                            (Some(code), Some(a)) => c.fn_cfg.map.push((code, a)),
+                            _ => warn.push(format!("fn.keys: can't use {kn} = {an:?}")),
+                        }
+                    }
+                }
+                _ => warn.push(format!("fn: unknown or bad setting `{k}`")),
+            }
         }
     }
     Ok((c, warn))
+}
+
+/// Persist `block-combo-keys` (from the tray) with a minimal text edit.
+pub fn save_block_combo_keys(on: bool) -> std::io::Result<()> {
+    let p = path().ok_or_else(|| std::io::Error::other("HOME not set"))?;
+    let text = fs::read_to_string(&p).unwrap_or_else(|_| TEMPLATE.to_string());
+    let line = format!("block-combo-keys = {on}");
+    let mut out: Vec<String> = Vec::new();
+    let mut done = false;
+    for l in text.lines() {
+        let t = l.trim_start();
+        if !done && (t.starts_with("block-combo-keys") || t.starts_with("block_combo_keys")) {
+            out.push(line.clone());
+            done = true;
+        } else {
+            out.push(l.to_string());
+            if !done && t == "[fn]" {
+                out.push(line.clone());
+                done = true;
+            }
+        }
+    }
+    if !done {
+        out.push(String::new());
+        out.push("[fn]".into());
+        out.push(line);
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    fs::write(p, s)
+}
+
+/// Human-readable Fn map, for logs.
+pub fn describe_fn(c: &FnConfig) -> String {
+    c.map.iter().map(|(k, a)| format!("{}={}", key_name(*k).trim_start_matches("KEY_"), a.name())).collect::<Vec<_>>().join(" ")
 }
 
 /// Load the config, writing the commented template first if none exists.
@@ -112,9 +208,12 @@ mod tests {
 
     #[test]
     fn template_parses() {
-        let (c, w) = parse(TEMPLATE).unwrap();
+        let (mut c, w) = parse(TEMPLATE).unwrap();
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(c, Config::default());
+        let mut d = Config::default();
+        c.fn_cfg.map.sort_by_key(|x| x.0);
+        d.fn_cfg.map.sort_by_key(|x| x.0);
+        assert_eq!(c, d);
     }
 
     #[test]
@@ -122,5 +221,14 @@ mod tests {
         let (c, w) = parse("[hotkeys]\ncycle-mode = [\"KEY_F13\", 191]\ntoggle = \"KEY_SCROLLLOCK\"\nbogus = []\n").unwrap();
         assert_eq!(c.bindings, vec![(183, Action::CycleMode), (191, Action::CycleMode), (70, Action::Toggle)]);
         assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn fn_section() {
+        let (c, w) = parse("[fn]\nwindow-ms = 250\nrelease-disarms = false\nblock-combo-keys = true\n[fn.keys]\nKEY_F1 = \"toggle\"\n").unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(c.fn_cfg.window, Duration::from_millis(250));
+        assert!(!c.fn_cfg.release_disarms && c.block_combo_keys && c.grab);
+        assert_eq!(c.fn_cfg.map, vec![(59, Action::Toggle)]);
     }
 }

@@ -17,6 +17,7 @@ usage:
 step actions (bind these in your desktop's keyboard-shortcut settings):
   onn-rgb cycle-mode                    (pulse -> steady -> off -> pulse)
   onn-rgb toggle                        (off <-> last mode)
+  onn-rgb mode-steady | mode-pulse
   onn-rgb brightness <up|down>
   onn-rgb speed <up|down>
 
@@ -43,6 +44,8 @@ fn main() {
     let step = match (args.first().map(String::as_str), args.get(1).map(String::as_str)) {
         (Some("cycle-mode"), _) => Some(Action::CycleMode),
         (Some("toggle"), _) => Some(Action::Toggle),
+        (Some("mode-steady"), _) => Some(Action::ModeSteady),
+        (Some("mode-pulse"), _) => Some(Action::ModePulse),
         (Some("brightness"), Some("up")) => Some(Action::BrightnessUp),
         (Some("brightness"), Some("down")) => Some(Action::BrightnessDown),
         (Some("speed"), Some("up")) => Some(Action::SpeedUp),
@@ -119,9 +122,8 @@ fn listen_keys() -> ! {
         handles.push(std::thread::spawn(move || {
             let n = node.display().to_string();
             let _ = hotkeys::read_node(&node, |ev| {
-                if ev.value == 1 {
-                    println!("{n}: {} = {}", hotkeys::key_name(ev.code), ev.code);
-                }
+                let what = match ev.value { 1 => "press", 0 => "release", 2 => "repeat", _ => "?" };
+                println!("{n}: {} = {} value {} ({what})", hotkeys::key_name(ev.code), ev.code, ev.value);
             });
         }));
     }

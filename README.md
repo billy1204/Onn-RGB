@@ -95,10 +95,11 @@ can't read the keyboard, the tray still works.
 ### Tray
 
 A StatusNotifierItem (via the pure-Rust `ksni` crate, no libdbus needed) with
-Mode / Brightness / Speed submenus, Open GUI, Refresh and Quit. Left-click
-opens the GUI. It re-reads the keyboard every `poll-seconds` (default 3) and
-when the menu opens, so it follows changes from the keyboard's own Fn keys,
-the GUI or the CLI.
+Mode / Brightness / Speed submenus, a "Block arrow keys during Fn combos"
+checkbox, Open GUI, Refresh and Quit. Left-click opens the GUI. Updates are
+event-driven: the tray changes when the daemon applies a change and re-reads
+the keyboard when the menu opens. There is no polling timer; at idle the daemon
+sleeps in `poll()` and makes no wakeups.
 
 | Desktop | Tray |
 |---|---|
@@ -106,38 +107,97 @@ the GUI or the CLI.
 | GNOME | needs the **AppIndicator and KStatusNotifierItem Support** extension (preinstalled on Ubuntu as "Ubuntu AppIndicators") |
 | No tray host (sway without waybar tray, etc.) | daemon logs "tray: not available" and keeps running hotkeys |
 
-### Hotkeys (evdev, works on X11 and Wayland)
+### Fn combos (evdev + uinput, works on X11 and Wayland)
 
-The daemon reads the keyboard's `/dev/input/event*` nodes directly
-(read-only, never grabbed, so your desktop and apps still get every key).
-This works the same on any desktop or compositor. Bindings live in
-`~/.config/onn-rgb/config.toml` (created on first run; `onn-rgb config`
-prints the path). Nothing is bound by default, because the keyboard's Fn
-lighting combos haven't been captured yet:
+The keyboard's firmware does nothing for Fn+key on its own. Pressing **Fn**
+sends `KEY_VOLUMEUP` (115) on the second input node (event5 here), and Fn+arrow
+then sends a plain arrow on the main node (event4). The daemon treats that
+Vol+ as an Fn modifier:
 
-```sh
-onn-rgb listen-keys          # press keys; prints e.g. "/dev/input/event5: KEY_F13 = 183"
+| Combo | Action |
+|---|---|
+| Fn+Up / Fn+Down | brightness +1 / -1 (0–3) |
+| Fn+Right / Fn+Left | speed +1 / -1 (0–12) |
+| Fn+Insert, Fn+PageDown | cycle mode Pulse → Steady → Off |
+| Fn+Home | Steady |
+| Fn+PageUp | Pulse |
+| Fn+Delete, Fn+End | toggle Off / last mode |
+
+Fn arms for `window-ms` (400 ms, renewed by each combo) and disarms when
+released. Only presses act; autorepeat is ignored; each action is one HID
+write, done on a separate thread so typing is never delayed.
+
+`~/.config/onn-rgb/config.toml` (`onn-rgb config` prints the path):
+
+```toml
+[fn]
+key = "KEY_VOLUMEUP"
+window-ms = 400
+release-disarms = true    # set false if Fn+Up does nothing (keyboard sends Fn release instantly)
+grab = true               # hide Fn's Vol+ from the desktop (needs uinput, below)
+block-combo-keys = false  # also swallow the arrow/Insert/... of a combo
+
+[fn.keys]
+KEY_UP = "brightness-up"
+KEY_DOWN = "brightness-down"
+KEY_RIGHT = "speed-up"
+KEY_LEFT = "speed-down"
+KEY_INSERT = "cycle-mode"
+KEY_HOME = "mode-steady"
+KEY_PAGEUP = "mode-pulse"
+KEY_DELETE = "toggle"
+KEY_END = "toggle"
+KEY_PAGEDOWN = "cycle-mode"
 ```
 
-Then add the name or number to an action in the config, e.g.
-`cycle-mode = ["KEY_F13"]`, and restart the daemon. Actions: `cycle-mode`,
-`toggle`, `brightness-up`, `brightness-down`, `speed-up`, `speed-down`.
-If the Fn lighting combos print nothing, the keyboard handles them
-internally; the tray still follows those changes via polling.
+Actions: `cycle-mode`, `toggle`, `brightness-up`, `brightness-down`,
+`speed-up`, `speed-down`, `mode-steady`, `mode-pulse`. The older `[hotkeys]`
+section still binds plain keys (no Fn) to actions.
 
-Reading input nodes needs permission:
+**Grab and passthrough.** With `grab = true` the daemon grabs the Fn node
+(`EVIOCGRAB`) and re-emits everything except the Fn Vol+ through a virtual
+device named **"onn-rgb passthrough"**, so Fn no longer changes the volume.
+With `block-combo-keys` (or the tray checkbox) it grabs the main node too and
+drops only the keys consumed by a combo; Caps/Num Lock LEDs are forwarded back
+to the real keyboard. Grabs are released on exit, Quit, SIGTERM/SIGINT and
+crashes (the kernel drops a grab when the process dies). A grab is only taken
+when no key is held. If `/dev/uinput` can't be opened the daemon logs it, shows
+a desktop notification and runs **ungrabbed**: combos still work but Fn also
+raises the volume. The keyboard is never left dead. Side effect: a real Vol+
+key on this keyboard would act as Fn.
+
+**Hotplug and resume.** Nodes are reopened after replug or suspend from a
+kernel uevent (netlink) monitor, not by polling. Only one daemon runs at a time
+(lock in `$XDG_RUNTIME_DIR/onn-rgb.lock`).
+
+`onn-rgb listen-keys` prints every event with its value (1 press, 0 release,
+2 repeat), e.g. `/dev/input/event5: KEY_VOLUMEUP = 115 value 1 (press)`.
+
+**Permissions** (one time):
+
+- Input nodes: `udev/71-onn-keyboard-input.rules`.
+- uinput (for grab): `udev/72-onn-uinput.rules` plus `modules-load/onn-rgb.conf`
+  so the `uinput` module loads at boot:
+
+```sh
+sudo cp udev/71-onn-keyboard-input.rules udev/72-onn-uinput.rules /etc/udev/rules.d/
+sudo cp modules-load/onn-rgb.conf /etc/modules-load.d/
+sudo modprobe uinput && sudo udevadm control --reload && sudo udevadm trigger
+```
 
 - **systemd or elogind distros** (Fedora, Ubuntu/Pop!_OS, Debian, Arch,
-  openSUSE, Gentoo/Void/Alpine with elogind): install
-  `udev/71-onn-keyboard-input.rules` (`uaccess` for the seat user):
-  `sudo cp udev/71-onn-keyboard-input.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger`
-- **No logind** (e.g. Void/Alpine/Artix without elogind): `uaccess` does
-  nothing. Install the rules anyway (they also set `GROUP="input"`), then
-  `sudo usermod -aG input $USER` and log out and back in. The same applies
-  to the hidraw rule (`70-onn-keyboard.rules`) for lighting control.
+  openSUSE, Gentoo/Void/Alpine with elogind): the rules' `uaccess` tag gives
+  the logged-in seat user access.
+- **No logind** (Void/Alpine/Artix without elogind): `uaccess` does nothing;
+  the rules also set `GROUP="input", MODE="0660"`, so run
+  `sudo usermod -aG input $USER` and log in again. Without systemd,
+  `/etc/modules-load.d` may be ignored; load uinput via your init's module
+  list (e.g. `/etc/modules` on OpenRC/Alpine, `/etc/modules-load.d` is read by
+  Void's runit too) or `modprobe uinput` at boot. The same group applies to
+  the hidraw rule (`70-onn-keyboard.rules`).
 
-Either way the user can read every key typed on this keyboard; skip the
-input rule if you don't want hotkeys.
+Note: input access lets the user read every key typed on this keyboard, and
+uinput lets them inject input. Skip these rules if you don't want hotkeys.
 
 ### Desktop shortcut fallback
 

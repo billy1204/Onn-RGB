@@ -1,66 +1,21 @@
 //! StatusNotifierItem tray icon (KDE, COSMIC, Cinnamon, XFCE, LXQt, Budgie,
-//! GNOME with the AppIndicator extension, ...).
+//! GNOME with the AppIndicator extension, ...). Event-driven: it never polls;
+//! the daemon's worker pushes new state after every change.
 
-use crate::actions::{self, Action};
-use crate::{Keyboard, Mode, Settings, MAX_BRIGHTNESS, MAX_SPEED};
+use crate::daemon::{Cmd, Ctl};
+use crate::{Mode, Settings, MAX_BRIGHTNESS, MAX_SPEED};
 use ksni::menu::*;
 use ksni::{MenuItem, ToolTip};
+use std::sync::mpsc::Sender;
 
 pub struct OnnTray {
     pub settings: Option<Settings>,
     pub error: Option<String>,
-}
-
-impl OnnTray {
-    pub fn new() -> Self {
-        let mut t = OnnTray { settings: None, error: None };
-        t.refresh();
-        t
-    }
-
-    /// Re-read the keyboard. Returns true if anything visible changed.
-    pub fn refresh(&mut self) -> bool {
-        let (s, e) = match Keyboard::open().and_then(|mut kb| kb.settings()) {
-            Ok(s) => (Some(s), None),
-            Err(e) => (self.settings, Some(e.to_string())),
-        };
-        let changed = s != self.settings || e != self.error;
-        self.settings = s;
-        self.error = e;
-        changed
-    }
-
-    pub fn action(&mut self, a: Action) {
-        match actions::run(a) {
-            Ok(s) => {
-                self.settings = Some(s);
-                self.error = None;
-            }
-            Err(e) => self.error = Some(e.to_string()),
-        }
-    }
-
-    fn with_kb(&mut self, f: impl FnOnce(&mut Keyboard) -> crate::Result<()>) {
-        let r = Keyboard::open().and_then(|mut kb| f(&mut kb));
-        if let Err(e) = r {
-            self.error = Some(e.to_string());
-        }
-        self.refresh();
-    }
-
-    fn summary(&self) -> String {
-        match (&self.settings, &self.error) {
-            (_, Some(e)) => e.clone(),
-            (Some(s), None) => format!("{}, brightness {}/{MAX_BRIGHTNESS}, speed {}/{MAX_SPEED}", s.mode, s.brightness, s.speed),
-            (None, None) => "keyboard not read yet".into(),
-        }
-    }
-}
-
-impl Default for OnnTray {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Hotkey/grab status line (e.g. "Fn combos active (grabbed)").
+    pub status: String,
+    pub block_combo_keys: bool,
+    pub tx: Sender<Cmd>,
+    pub ctl: Ctl,
 }
 
 pub fn open_gui() {
@@ -68,6 +23,19 @@ pub fn open_gui() {
     let prog = sibling.filter(|p| p.exists()).map(|p| p.into_os_string()).unwrap_or_else(|| "onn-rgb-gui".into());
     if let Err(e) = std::process::Command::new(&prog).spawn() {
         eprintln!("onn-rgb: can't start {}: {e}", prog.to_string_lossy());
+    }
+}
+
+impl OnnTray {
+    fn summary(&self) -> String {
+        match (&self.settings, &self.error) {
+            (_, Some(e)) => e.clone(),
+            (Some(s), None) => format!("{}, brightness {}/{MAX_BRIGHTNESS}, speed {}/{MAX_SPEED}", s.mode, s.brightness, s.speed),
+            (None, None) => "reading keyboard…".into(),
+        }
+    }
+    fn send(&self, c: Cmd) {
+        let _ = self.tx.send(c);
     }
 }
 
@@ -82,13 +50,18 @@ impl ksni::Tray for OnnTray {
         "input-keyboard".into()
     }
     fn tool_tip(&self) -> ToolTip {
-        ToolTip { title: "onn Keyboard Lighting".into(), description: self.summary(), ..Default::default() }
+        ToolTip {
+            title: "onn Keyboard Lighting".into(),
+            description: format!("{}\n{}", self.summary(), self.status),
+            ..Default::default()
+        }
     }
     fn activate(&mut self, _x: i32, _y: i32) {
         open_gui();
     }
     fn menu_about_to_show(&mut self) {
-        self.refresh();
+        // Picks up changes made by the GUI or CLI; one read, on demand only.
+        self.send(Cmd::Refresh);
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let s = self.settings;
@@ -104,15 +77,13 @@ impl ksni::Tray for OnnTray {
         };
         vec![
             StandardItem { label: self.summary(), enabled: false, ..Default::default() }.into(),
+            StandardItem { label: self.status.clone(), enabled: false, ..Default::default() }.into(),
             MenuItem::Separator,
             SubMenu {
                 label: "Mode".into(),
                 submenu: vec![RadioGroup {
                     selected: mode_idx,
-                    select: Box::new(|t: &mut Self, i| {
-                        let m = Mode::NAMED[i];
-                        t.with_kb(|kb| kb.set_mode(m));
-                    }),
+                    select: Box::new(|t: &mut Self, i| t.send(Cmd::SetMode(Mode::NAMED[i]))),
                     options: radio(vec!["Pulse".into(), "Steady".into(), "Off".into()]),
                 }
                 .into()],
@@ -123,7 +94,7 @@ impl ksni::Tray for OnnTray {
                 label: "Brightness".into(),
                 submenu: vec![RadioGroup {
                     selected: s.map_or(usize::MAX, |s| s.brightness as usize),
-                    select: Box::new(|t: &mut Self, i| t.with_kb(|kb| kb.set_brightness(i as u8))),
+                    select: Box::new(|t: &mut Self, i| t.send(Cmd::SetBrightness(i as u8))),
                     options: radio((0..=MAX_BRIGHTNESS).map(|b| b.to_string()).collect()),
                 }
                 .into()],
@@ -134,7 +105,7 @@ impl ksni::Tray for OnnTray {
                 label: "Speed".into(),
                 submenu: vec![RadioGroup {
                     selected: s.map_or(usize::MAX, |s| s.speed as usize),
-                    select: Box::new(|t: &mut Self, i| t.with_kb(|kb| kb.set_speed(i as u8))),
+                    select: Box::new(|t: &mut Self, i| t.send(Cmd::SetSpeed(i as u8))),
                     options: radio(
                         (0..=MAX_SPEED)
                             .map(|v| match v { 0 => "0 (slowest)".into(), MAX_SPEED => format!("{v} (fastest)"), _ => v.to_string() })
@@ -146,6 +117,19 @@ impl ksni::Tray for OnnTray {
             }
             .into(),
             MenuItem::Separator,
+            CheckmarkItem {
+                label: "Block arrow keys during Fn combos".into(),
+                checked: self.block_combo_keys,
+                activate: Box::new(|t: &mut Self| {
+                    t.block_combo_keys = !t.block_combo_keys;
+                    t.ctl.set_block_combo_keys(t.block_combo_keys);
+                    if let Err(e) = crate::config::save_block_combo_keys(t.block_combo_keys) {
+                        eprintln!("onn-rgb: can't save config: {e}");
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
             StandardItem {
                 label: "Open GUI".into(),
                 icon_name: "preferences-desktop-keyboard".into(),
@@ -155,16 +139,17 @@ impl ksni::Tray for OnnTray {
             .into(),
             StandardItem {
                 label: "Refresh".into(),
-                activate: Box::new(|t: &mut Self| {
-                    t.refresh();
-                }),
+                activate: Box::new(|t: &mut Self| t.send(Cmd::Refresh)),
                 ..Default::default()
             }
             .into(),
             StandardItem {
                 label: "Quit".into(),
                 icon_name: "application-exit".into(),
-                activate: Box::new(|_| std::process::exit(0)),
+                // Goes through the SIGTERM path so grabs are released cleanly.
+                activate: Box::new(|_| unsafe {
+                    libc::kill(libc::getpid(), libc::SIGTERM);
+                }),
                 ..Default::default()
             }
             .into(),
