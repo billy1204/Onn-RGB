@@ -42,10 +42,15 @@ pub enum Cmd {
 #[derive(Clone)]
 pub struct Ctl {
     block_combo: Arc<AtomicBool>,
+    notices: Arc<AtomicBool>,
     wake_fd: RawFd,
 }
 
 impl Ctl {
+    pub fn set_notices(&self, on: bool) {
+        self.notices.store(on, Ordering::SeqCst);
+    }
+
     pub fn set_block_combo_keys(&self, on: bool) {
         self.block_combo.store(on, Ordering::SeqCst);
         unsafe { libc::write(self.wake_fd, b"c".as_ptr().cast(), 1) };
@@ -98,9 +103,28 @@ fn desktop_notify(msg: &str) {
         .spawn();
 }
 
-fn worker(rx: Receiver<Cmd>, notify: Notify) {
+fn kind_of(cmd: &Cmd) -> Option<crate::notify::Kind> {
+    use crate::notify::Kind;
+    Some(match cmd {
+        Cmd::Refresh => return None,
+        Cmd::SetMode(_) => Kind::Mode,
+        Cmd::SetBrightness(_) => Kind::Brightness,
+        Cmd::SetSpeed(_) => Kind::Speed,
+        Cmd::Act(a) => match a {
+            Action::BrightnessUp | Action::BrightnessDown => Kind::Brightness,
+            Action::SpeedUp | Action::SpeedDown => Kind::Speed,
+            _ => Kind::Mode,
+        },
+    })
+}
+
+fn worker(rx: Receiver<Cmd>, notify: Notify, notices: Arc<AtomicBool>) {
+    let _ = &notices;
+    #[cfg(feature = "tray")]
+    let mut notifier = crate::notify::Notifier::new();
     let mut cached: Option<Settings> = None;
     for cmd in rx {
+        let kind = kind_of(&cmd);
         let r = Keyboard::open().and_then(|mut kb| {
             let cur = match (&cmd, cached) {
                 (Cmd::Refresh, _) | (_, None) => kb.settings()?,
@@ -109,8 +133,18 @@ fn worker(rx: Receiver<Cmd>, notify: Notify) {
             match cmd {
                 Cmd::Refresh => Ok(cur),
                 Cmd::Act(a) => actions::apply_from(&mut kb, cur, a),
-                Cmd::SetMode(m) => kb.set_mode(m).map(|_| Settings { mode: m, ..cur }),
+                Cmd::SetMode(m) => {
+                    if m == cur.mode {
+                        return Ok(cur);
+                    }
+                    if cur.mode != Mode::Off {
+                        actions::remember_mode(cur.mode);
+                    }
+                    kb.set_mode(m).map(|_| Settings { mode: m, ..cur })
+                }
+                Cmd::SetBrightness(b) if b == cur.brightness => Ok(cur),
                 Cmd::SetBrightness(b) => kb.set_brightness(b).map(|_| Settings { brightness: b, ..cur }),
+                Cmd::SetSpeed(v) if v == cur.speed => Ok(cur),
                 Cmd::SetSpeed(v) => kb.set_speed(v).map(|_| Settings { speed: v, ..cur }),
             }
         });
@@ -120,6 +154,13 @@ fn worker(rx: Receiver<Cmd>, notify: Notify) {
                     log(format!("lighting: {}, brightness {}, speed {}", s.mode, s.brightness, s.speed));
                 }
                 cached = Some(s);
+                #[cfg(feature = "tray")]
+                if let Some(k) = kind {
+                    if notices.load(Ordering::SeqCst) {
+                        notifier.show(&crate::notify::text(k, s));
+                    }
+                }
+                let _ = kind;
                 notify(Box::new(move |t| {
                     t.settings = Some(s);
                     t.error = None;
@@ -356,7 +397,8 @@ pub fn run() -> ! {
     }
     let (ctl_r, ctl_w) = pipe();
     let block_combo = Arc::new(AtomicBool::new(cfg.block_combo_keys));
-    let ctl = Ctl { block_combo: block_combo.clone(), wake_fd: ctl_w };
+    let notices = Arc::new(AtomicBool::new(cfg.notices));
+    let ctl = Ctl { block_combo: block_combo.clone(), notices: notices.clone(), wake_fd: ctl_w };
 
     let (tx, rx) = mpsc::channel::<Cmd>();
     #[allow(unused_mut)]
@@ -370,6 +412,7 @@ pub fn run() -> ! {
             error: None,
             status: String::new(),
             block_combo_keys: cfg.block_combo_keys,
+            notices: cfg.notices,
             tx: tx.clone(),
             ctl: ctl.clone(),
         };
@@ -396,7 +439,7 @@ pub fn run() -> ! {
 
     {
         let notify = notify.clone();
-        thread::Builder::new().name("hid".into()).spawn(move || worker(rx, notify)).unwrap();
+        thread::Builder::new().name("hid".into()).spawn(move || worker(rx, notify, notices)).unwrap();
     }
     let _ = tx.send(Cmd::Refresh);
 

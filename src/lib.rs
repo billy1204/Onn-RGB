@@ -11,6 +11,7 @@ pub mod daemon;
 pub mod evdev;
 pub mod fnkeys;
 pub mod hotkeys;
+pub mod notify;
 #[cfg(feature = "tray")]
 pub mod tray;
 

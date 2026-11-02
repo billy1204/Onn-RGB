@@ -94,12 +94,23 @@ can't read the keyboard, the tray still works.
 
 ### Tray
 
-A StatusNotifierItem (via the pure-Rust `ksni` crate, no libdbus needed) with
-Mode / Brightness / Speed submenus, a "Block arrow keys during Fn combos"
-checkbox, Open GUI, Refresh and Quit. Left-click opens the GUI. Updates are
-event-driven: the tray changes when the daemon applies a change and re-reads
-the keyboard when the menu opens. There is no polling timer; at idle the daemon
-sleeps in `poll()` and makes no wakeups.
+A StatusNotifierItem (via the pure-Rust `ksni` crate, no libdbus needed) with a
+flat menu: Mode (Pulse/Steady/Off) and Brightness (0-3) radio items, "Speed
+N/12" with Faster/Slower, and checkboxes for **Show change notices**, **Block
+arrow keys during Fn combos** and **Start at login**, then Open GUI and Quit.
+**Left-click toggles the lighting off and back to the last mode.**
+
+- Change notices ("Brightness 3/3 (max)") go through
+  org.freedesktop.Notifications after Fn-combo and tray changes; each replaces
+  the previous one. Setting: `[tray] notices = true`.
+- Start at login writes `~/.config/autostart/onn-rgb-daemon.desktop` (pointing
+  at the AppImage when run from one); unchecking removes only that file.
+- Under an AppImage the bundled icon is used (IconThemePath, plus a pixmap
+  for hosts that ignore it).
+
+Updates are event-driven: the tray changes when the daemon applies a change and
+re-reads the keyboard when the menu opens. There is no polling timer; at idle
+the daemon sleeps in `poll()` and makes no wakeups.
 
 | Desktop | Tray |
 |---|---|

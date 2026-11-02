@@ -56,7 +56,7 @@ fn last_mode_file() -> Option<PathBuf> {
     Some(base.join("onn-rgb/last-mode"))
 }
 
-fn remember_mode(m: Mode) {
+pub(crate) fn remember_mode(m: Mode) {
     if let Some(p) = last_mode_file() {
         let _ = fs::create_dir_all(p.parent().unwrap());
         let _ = fs::write(p, m.raw().to_string());

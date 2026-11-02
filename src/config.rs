@@ -28,6 +28,8 @@ speed-down = []
 
 [tray]
 enabled = true
+# Desktop notice ("Brightness 3/3 (max)") after Fn-combo and tray changes.
+notices = true
 
 # Fn combos. The keyboard reports Fn as KEY_VOLUMEUP on its second event node;
 # a press arms Fn, which lasts until its release (if release-disarms) or
@@ -64,6 +66,7 @@ pub struct Config {
     pub hotkeys_enabled: bool,
     pub bindings: Vec<(u16, Action)>,
     pub tray_enabled: bool,
+    pub notices: bool,
     pub fn_cfg: FnConfig,
     pub grab: bool,
     pub block_combo_keys: bool,
@@ -75,6 +78,7 @@ impl Default for Config {
             hotkeys_enabled: true,
             bindings: Vec::new(),
             tray_enabled: true,
+            notices: true,
             fn_cfg: FnConfig::default(),
             grab: true,
             block_combo_keys: false,
@@ -121,6 +125,9 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
         if let Some(b) = t.get("enabled").and_then(|v| v.as_bool()) {
             c.tray_enabled = b;
         }
+        if let Some(b) = t.get("notices").and_then(|v| v.as_bool()) {
+            c.notices = b;
+        }
     }
     if let Some(f) = table.get("fn").and_then(|v| v.as_table()) {
         for (k, v) in f {
@@ -154,32 +161,75 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
 
 /// Persist `block-combo-keys` (from the tray) with a minimal text edit.
 pub fn save_block_combo_keys(on: bool) -> std::io::Result<()> {
+    save_bool("fn", &["block-combo-keys", "block_combo_keys"], on)
+}
+
+/// Persist `[tray] notices` (from the tray).
+pub fn save_notices(on: bool) -> std::io::Result<()> {
+    save_bool("tray", &["notices"], on)
+}
+
+fn save_bool(section: &str, keys: &[&str], on: bool) -> std::io::Result<()> {
     let p = path().ok_or_else(|| std::io::Error::other("HOME not set"))?;
     let text = fs::read_to_string(&p).unwrap_or_else(|_| TEMPLATE.to_string());
-    let line = format!("block-combo-keys = {on}");
+    let s = set_bool(&text, section, keys, on);
+    if let Some(d) = p.parent() {
+        fs::create_dir_all(d)?;
+    }
+    fs::write(p, s)
+}
+
+/// Set `keys[0] = on` inside `[section]`, replacing an existing line.
+fn set_bool(text: &str, section: &str, keys: &[&str], on: bool) -> String {
+    let line = format!("{} = {on}", keys[0]);
+    let header = format!("[{section}]");
     let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
     let mut done = false;
+    let mut header_at = None;
     for l in text.lines() {
-        let t = l.trim_start();
-        if !done && (t.starts_with("block-combo-keys") || t.starts_with("block_combo_keys")) {
+        let t = l.trim();
+        if t.starts_with('[') {
+            cur = t.to_string();
+            if t == header {
+                header_at = Some(out.len());
+            }
+        }
+        let k = t.split('=').next().unwrap_or("").trim();
+        if !done && cur == header && keys.contains(&k) {
             out.push(line.clone());
             done = true;
         } else {
             out.push(l.to_string());
-            if !done && t == "[fn]" {
-                out.push(line.clone());
-                done = true;
-            }
         }
     }
     if !done {
-        out.push(String::new());
-        out.push("[fn]".into());
-        out.push(line);
+        match header_at {
+            Some(i) => out.insert(i + 1, line),
+            None => {
+                out.push(String::new());
+                out.push(header);
+                out.push(line);
+            }
+        }
     }
     let mut s = out.join("\n");
     s.push('\n');
-    fs::write(p, s)
+    s
+}
+
+#[cfg(test)]
+#[test]
+fn set_bool_edits() {
+    let t = "[tray]\nenabled = true\n[fn]\nkey = \"KEY_VOLUMEUP\"\n";
+    let s = set_bool(t, "tray", &["notices"], false);
+    assert_eq!(s, "[tray]\nnotices = false\nenabled = true\n[fn]\nkey = \"KEY_VOLUMEUP\"\n");
+    assert_eq!(set_bool(&s, "tray", &["notices"], true), s.replace("false", "true"));
+    let s = set_bool(t, "fn", &["block-combo-keys", "block_combo_keys"], true);
+    assert!(s.contains("[fn]\nblock-combo-keys = true\n"));
+    let s2 = set_bool("[hotkeys]\n", "tray", &["notices"], false);
+    assert_eq!(s2, "[hotkeys]\n\n[tray]\nnotices = false\n");
+    assert!(!parse(&set_bool(TEMPLATE, "tray", &["notices"], false)).unwrap().0.notices);
 }
 
 /// Human-readable Fn map, for logs.

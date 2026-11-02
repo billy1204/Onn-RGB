@@ -1862,9 +1862,12 @@ dependencies = [
  "eframe",
  "ksni",
  "libc",
+ "png",
  "serde",
+ "tokio",
  "toml",
  "winit",
+ "zbus",
 ]
 
 [[package]]

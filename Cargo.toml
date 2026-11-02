@@ -11,7 +11,7 @@ keywords = ["keyboard", "led", "hid", "onn", "linux"]
 default = ["gui", "tray"]
 gui = ["dep:eframe", "dep:winit"]
 # System tray (StatusNotifierItem) for `onn-rgb daemon`.
-tray = ["dep:ksni"]
+tray = ["dep:ksni", "dep:zbus", "dep:tokio", "dep:png"]
 
 [dependencies]
 # eframe defaults minus accesskit, which pulls in a large D-Bus dependency tree.
@@ -23,6 +23,9 @@ winit = { version = "0.30", optional = true }
 # Pure-Rust D-Bus (zbus) on a current-thread tokio runtime (idle = no wakeups);
 # no libdbus needed.
 ksni = { version = "0.3", optional = true, default-features = false, features = ["blocking", "tokio"] }
+zbus = { version = "5", optional = true, default-features = false, features = ["tokio"] }
+tokio = { version = "1", optional = true, features = ["rt", "net", "time"] }
+png = { version = "0.18", optional = true }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
