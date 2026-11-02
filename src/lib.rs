@@ -19,7 +19,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::thread;
+use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
 const HID_ID: &str = "00003938:00001296";
@@ -190,14 +190,28 @@ impl Keyboard {
             .map_err(|e| Error::Io(self.path.clone(), e))?;
         let deadline = Instant::now() + Duration::from_millis(500);
         let mut buf = [0u8; 64];
-        while Instant::now() < deadline {
+        loop {
             match self.file.read(&mut buf) {
                 Ok(n) if is_reply(&buf[..n], p[3]) => return Ok(buf[..n].to_vec()),
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(1))
-                }
+                Ok(_) => continue, // other report; read again
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(Error::Io(self.path.clone(), e)),
+            }
+            // Sleep in poll() until a report arrives or the deadline passes.
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let mut pfd = libc::pollfd { fd: self.file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            let ms = left.as_millis().clamp(1, i32::MAX as u128) as i32;
+            let r = unsafe { libc::poll(&mut pfd, 1, ms) };
+            if r < 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() != io::ErrorKind::Interrupted {
+                    return Err(Error::Io(self.path.clone(), e));
+                }
+            } else if r == 0 {
+                break;
             }
         }
         Err(Error::NoResponse)

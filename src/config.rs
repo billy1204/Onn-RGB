@@ -10,8 +10,10 @@ use std::path::PathBuf;
 pub const TEMPLATE: &str = r#"# onn-rgb configuration (read by `onn-rgb daemon`).
 #
 # Hotkeys are read straight from the keyboard's evdev nodes, so they work on
-# X11 and Wayland under any desktop. Keys are only observed, never grabbed:
-# other apps still receive them.
+# X11 and Wayland under any desktop. By default the Fn node (event5) is
+# grabbed and re-emitted through the "onn-rgb passthrough" uinput device minus
+# the Fn key itself; the main typing node (event4) is grabbed only with
+# block-combo-keys. Other apps still receive every other key.
 #
 # Run `onn-rgb listen-keys`, press a key (e.g. an Fn lighting combo), and
 # copy the name or number it prints into a list below. Leave a list empty
@@ -275,9 +277,10 @@ mod tests {
 
     #[test]
     fn fn_section() {
-        let (c, w) = parse("[fn]\nwindow-ms = 250\nrelease-disarms = false\nblock-combo-keys = true\n[fn.keys]\nKEY_F1 = \"toggle\"\n").unwrap();
+        let (c, w) = parse("[fn]\nwindow-ms = 400\nrelease-disarms = false\nblock-combo-keys = true\n[fn.keys]\nKEY_F1 = \"toggle\"\n").unwrap();
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(c.fn_cfg.window, Duration::from_millis(250));
+        assert_eq!(c.fn_cfg.window, Duration::from_millis(400));
+        assert_eq!(c.fn_cfg.window, FnConfig::default().window);
         assert!(!c.fn_cfg.release_disarms && c.block_combo_keys && c.grab);
         assert_eq!(c.fn_cfg.map, vec![(59, Action::Toggle)]);
     }

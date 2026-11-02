@@ -1,5 +1,7 @@
 # Optional: let onn-rgb's daemon read hotkeys from the onn keyboard's input
-# event nodes (read-only; keys are never grabbed). Only needed for
+# event nodes. By default the daemon grabs the Fn node (event5) and re-emits
+# its keys minus Fn via uinput (see 72-onn-uinput.rules); the main node
+# (event4) is grabbed only with block-combo-keys. Only needed for
 # `onn-rgb daemon` hotkeys and `onn-rgb listen-keys`.
 #
 # systemd/elogind distros: TAG+="uaccess" gives the user at the local seat

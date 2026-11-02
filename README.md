@@ -77,6 +77,9 @@ your own risk.
 Uses `appimagetool` cached in `~/.cache/kraken-rgb-tools/` (downloaded there
 if missing; no root) and falls back to `--appimage-extract-and-run` without FUSE.
 
+On Fedora and openSUSE without FUSE2 (libfuse.so.2), run the AppImage with
+`--appimage-extract-and-run`, e.g. `./onn_Keyboard_Lighting-x86_64.AppImage --appimage-extract-and-run daemon`.
+
 - No arguments: opens the GUI. `--gui` forces the GUI.
 - Any other arguments go to the CLI: `./onn_Keyboard_Lighting-x86_64.AppImage status`, `… mode pulse`, `… --help`.
 - **The udev rule is not installed by the AppImage**; install it separately (one time):

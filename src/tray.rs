@@ -131,6 +131,10 @@ fn pixmap() -> Vec<Icon> {
 
 impl OnnTray {
     fn summary(&self) -> String {
+        let s = self.lighting();
+        if self.block_combo_keys { format!("{s} · keys blocked") } else { s }
+    }
+    fn lighting(&self) -> String {
         match (&self.settings, &self.error) {
             (_, Some(e)) => e.clone(),
             (Some(s), None) => format!("{}, brightness {}/{MAX_BRIGHTNESS}, speed {}/{MAX_SPEED}", s.mode, s.brightness, s.speed),
