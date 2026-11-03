@@ -126,6 +126,38 @@ on a separate input node, and the onn-rgb daemon turns Fn+key into lighting comm
 
 More detail: [docs/DETAILS.md](docs/DETAILS.md).
 
+## Known issues
+
+- **Fn+letter also types the letter** unless the optional uinput rule (`72-onn-uinput.rules`) is installed and `block-combo-keys` is turned on.
+- **Changing the Fn mode keys needs a daemon restart.** The daemon only reads them at startup.
+- **On COSMIC, reopening the app may only flash the window** in the taskbar instead of bringing it to the front (not yet confirmed).
+- **No tray host means no background mode.** On desktops without a system tray, closing the window quits the app completely.
+- **No `--version` flag.** The version (0.2.0) is only in `Cargo.toml`.
+- **If `XDG_RUNTIME_DIR` isn't set**, lock and socket files fall back to `/tmp` (see Security).
+- **Startup files break on paths with spaces.** The autostart and systemd entries written by `install-user.sh` don't quote the binary path.
+
+## Security
+
+A read-only review (Nov 2026) found no high-severity problems. `cargo audit` reported no known vulnerabilities across 369 crates. It flagged five unmaintained crates pulled in by the GUI and tray libraries (warnings only). No secrets were found in the git history.
+
+Things to be aware of:
+
+- **Key-reading rule (`71-onn-keyboard-input.rules`):** it's limited to this keyboard (3938:1296), but any program run by the logged-in user can then read what's typed on it. It's only needed for the Fn hotkeys. If you skip it, bind the CLI commands in your desktop's shortcut settings instead.
+- **uinput rule (`72-onn-uinput.rules`, optional):** lets any program run by the logged-in user create a virtual keyboard and inject keystrokes. Only install it if you want `block-combo-keys`.
+- **`input` group:** on distros without systemd or elogind, adding yourself to `input` lets you read *every* keyboard on the system. Prefer `uaccess` where it's available.
+- **Build script:** `scripts/build-appimage.sh` downloads appimagetool without checking a checksum. Pinning a version and verifying its SHA-256 is planned.
+- **Releases** don't include checksums or signatures yet.
+- **`/tmp` fallback:** without `XDG_RUNTIME_DIR`, lock and socket files go in shared `/tmp`, where another local user could block or spoof them.
+
+What it does *not* do:
+
+- It only writes to the onn keyboard's vendor HID interface. Before writing, it checks the device ID and the vendor usage page.
+- It never logs keystrokes.
+- It never runs shell commands built from the config.
+- It needs no root access at runtime.
+
+Report security problems privately through GitHub's security advisories for this repo.
+
 ## Disclaimer
 
 Not affiliated with onn., Walmart, or KWB. Reverse-engineered by hand; use at
