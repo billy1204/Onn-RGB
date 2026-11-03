@@ -9,7 +9,7 @@ background daemon that handles the Fn lighting keys, written in Rust.
 
 - Modes: **steady**, **pulse**, **flash**, **off**
 - Brightness: 0–3
-- Effect speed: 0 (slowest) – 12 (fastest); applies to pulse
+- Effect speed: 0 (slowest) up to 9 for pulse and 3 for flash; steady and off ignore it
 - **Fn keys on Linux**: the daemon listens for Fn combos and sends the change to the keyboard
   - Fn+Up / Fn+Right: faster
   - Fn+Down / Fn+Left: slower
@@ -68,7 +68,7 @@ Build the AppImage yourself: `scripts/build-appimage.sh` (output in `dist/`).
 onn-rgb status
 onn-rgb mode pulse            # steady | pulse | flash | off
 onn-rgb brightness 3
-onn-rgb speed 6
+onn-rgb speed 6               # pulse 0-9, flash 0-3 (higher values are capped)
 onn-rgb set --mode pulse --brightness 2 --speed 6
 onn-rgb cycle-mode            # steady -> pulse -> flash -> off
 onn-rgb toggle                # off / last mode
@@ -118,7 +118,7 @@ report ID 4, 64-byte reports):
 | 8+ | data |
 
 Config offsets: `01` mode, `02` brightness, `03` speed (stored inverted).
-Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0B` off.
+Mode values: `00` pulse, `01` steady, `02` flash, `0B` off. The app caps speed at 9 for pulse and 3 for flash.
 
 The keyboard firmware does not act on Fn lighting combos itself. Under Windows the
 vendor software handles them; under Linux the Fn key arrives as `KEY_VOLUMEUP`
