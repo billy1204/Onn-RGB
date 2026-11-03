@@ -2,45 +2,102 @@
 
 Linux lighting control for the **onn. 104-Key LED Gaming Membrane Keyboard**
 (Walmart model `100122478`, USB ID `3938:1296`). The official onn software is
-Windows-only; this replaces it on Linux with a small CLI and GUI written in Rust.
+Windows-only; this replaces it on Linux with a CLI, a GUI, a tray icon and a
+background daemon that handles the Fn lighting keys, written in Rust.
 
 ## Features
 
-- Modes: **steady** (alias `force`), **off**, **pulse**, **flash** — the only four the keyboard has
+- Modes: **steady**, **pulse**, **flash**, **off**
 - Brightness: 0–3
-- Effect speed: 0 (slowest) – 12 (fastest)
-- No runtime dependencies: talks to the keyboard directly via `/dev/hidraw`
+- Effect speed: 0 (slowest) – 12 (fastest); applies to pulse
+- **Fn keys on Linux**: the daemon listens for Fn combos and sends the change to the keyboard
+  - Fn+Up / Fn+Right: faster
+  - Fn+Down / Fn+Left: slower
+  - Fn+S steady, Fn+P pulse, Fn+F flash, Fn+O off (reassignable)
+- **Tray icon**: mode, brightness, speed, open GUI, quit. Closing the GUI window keeps
+  the app running in the tray; choose **Quit** from the tray to exit.
+- GUI section to reassign the Fn mode keys
+- Desktop notices on changes, start at login, hotplug support
+- Portable **AppImage** (built against glibc 2.28, runs on most distros)
+- Talks to the keyboard directly via `/dev/hidraw`; no runtime services needed
 
 The keyboard's LEDs are fixed-color, so there is no color control.
 
 ## Install
 
+### AppImage (easiest)
+
+Download `onn_Keyboard_Lighting-x86_64.AppImage` from Releases, then:
+
 ```sh
-# 1. Let your user access the keyboard (one time)
-sudo cp udev/70-onn-keyboard.rules /etc/udev/rules.d/
-# optional, for daemon hotkeys / listen-keys:
-sudo cp udev/71-onn-keyboard-input.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger
-
-# 2. Build and install (needs Rust: https://rustup.rs)
-cargo install --path .
-
-# 3. Optional: add the GUI to your app menu
-cp onn-rgb.desktop ~/.local/share/applications/
+chmod +x onn_Keyboard_Lighting-x86_64.AppImage
+./onn_Keyboard_Lighting-x86_64.AppImage
 ```
 
-CLI only, without the GUI dependencies: `cargo install --path . --no-default-features`
+### Permissions (one time, needed for either install)
+
+```sh
+sudo cp udev/70-onn-keyboard.rules udev/71-onn-keyboard-input.rules udev/72-onn-uinput.rules /etc/udev/rules.d/
+sudo cp modules-load/onn-rgb.conf /etc/modules-load.d/
+sudo modprobe uinput
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+Log out and back in (or replug the keyboard) afterward.
+
+- `70` lets your user talk to the keyboard's lighting interface.
+- `71` lets the daemon read the Fn key.
+- `72` lets the daemon pass keys through, so Fn+letter doesn't also type the letter
+  (turn on "Block keys during Fn combos" in the tray).
+
+### From source
+
+```sh
+# needs Rust: https://rustup.rs
+cargo install --path .
+scripts/install-user.sh        # desktop entry, icon, autostart
+```
+
+CLI only, without GUI/tray dependencies: `cargo install --path . --no-default-features`
+
+Build the AppImage yourself: `scripts/build-appimage.sh` (output in `dist/`).
 
 ## Usage
 
 ```sh
 onn-rgb status
-onn-rgb mode pulse
+onn-rgb mode pulse            # steady | pulse | flash | off
 onn-rgb brightness 3
-onn-rgb speed 2
+onn-rgb speed 6
 onn-rgb set --mode pulse --brightness 2 --speed 6
+onn-rgb cycle-mode            # steady -> pulse -> flash -> off
+onn-rgb toggle                # off / last mode
+onn-rgb brightness-up | brightness-down | speed-up | speed-down
+onn-rgb daemon                # tray + Fn keys (started automatically by the GUI)
+onn-rgb listen-keys           # show raw key events, for debugging
+onn-rgb config                # print config path
 onn-rgb-gui
 ```
+
+The CLI commands can also be bound as custom shortcuts in your desktop's keyboard settings.
+
+## Configuration
+
+`~/.config/onn-rgb/config.toml`:
+
+```toml
+[fn]
+window-ms = 400            # how long after Fn a combo key counts
+block-combo-keys = false   # swallow the combo key so it isn't typed (needs rule 72)
+
+[fn.modes]                 # key name, key number, or "" to unbind
+steady = "KEY_S"
+off    = "KEY_O"
+pulse  = "KEY_P"
+flash  = "KEY_F"
+```
+
+Restart the daemon (tray Quit, then reopen) after editing.
 
 ## Protocol notes
 
@@ -54,217 +111,20 @@ report ID 4, 64-byte reports):
 | 1–2 | checksum: 16-bit LE sum of bytes 3–63 |
 | 3 | command: `01` begin, `02` end, `05` read config, `06` write config |
 | 4 | data size |
-| 5 | config offset |
+| 5–6 | config offset |
+| 7 | status |
 | 8+ | data |
 
 Config offsets: `01` mode, `02` brightness, `03` speed (stored inverted).
-Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0F` off. Any other value read back is treated as steady.
+Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0F` off.
 
-Fn lighting shortcuts only work under Windows, where the vendor software
-handles them; under Linux those keys send media keys.
+The keyboard firmware does not act on Fn lighting combos itself. Under Windows the
+vendor software handles them; under Linux the Fn key arrives as `KEY_VOLUMEUP`
+on a separate input node, and the onn-rgb daemon turns Fn+key into lighting commands.
+
+More detail: [docs/DETAILS.md](docs/DETAILS.md).
 
 ## Disclaimer
 
 Not affiliated with onn., Walmart, or KWB. Reverse-engineered by hand; use at
 your own risk.
-
-## AppImage
-
-```sh
-./scripts/build-appimage.sh   # -> dist/onn_Keyboard_Lighting-x86_64.AppImage
-```
-
-Uses `appimagetool` cached in `~/.cache/kraken-rgb-tools/` (downloaded there
-if missing; no root) and falls back to `--appimage-extract-and-run` without FUSE.
-
-On Fedora and openSUSE without FUSE2 (libfuse.so.2), run the AppImage with
-`--appimage-extract-and-run`, e.g. `./onn_Keyboard_Lighting-x86_64.AppImage --appimage-extract-and-run daemon`.
-
-- No arguments: opens the GUI. `--gui` forces the GUI.
-- Any other arguments go to the CLI: `./onn_Keyboard_Lighting-x86_64.AppImage status`, `… mode pulse`, `… --help`.
-- **The udev rule is not installed by the AppImage**; install it separately (one time):
-
-```sh
-./onn_Keyboard_Lighting-x86_64.AppImage udev-rule | sudo tee /etc/udev/rules.d/70-onn-keyboard.rules
-sudo udevadm control --reload && sudo udevadm trigger
-```
-
-## Tray icon and hotkeys (`onn-rgb daemon`)
-
-`onn-rgb daemon` runs a tray icon plus a hotkey listener. Each part works on
-its own: if there's no tray host, hotkeys and the CLI still work; if hotkeys
-can't read the keyboard, the tray still works.
-
-### Tray
-
-A StatusNotifierItem (via the pure-Rust `ksni` crate, no libdbus needed) with a
-flat menu: Mode (Steady/Off/Pulse/Flash) and Brightness (0-3) radio items, "Speed
-N/12" with Faster/Slower, and checkboxes for **Show change notices**, **Block
-arrow keys during Fn combos** and **Start at login**, then Open GUI and Quit.
-**Left-click toggles the lighting off and back to the last mode.**
-
-- Change notices ("Brightness 3/3 (max)") go through
-  org.freedesktop.Notifications after Fn-combo and tray changes; each replaces
-  the previous one. Setting: `[tray] notices = true`.
-- Start at login writes `~/.config/autostart/onn-rgb-daemon.desktop` (pointing
-  at the AppImage when run from one); unchecking removes only that file.
-- Under an AppImage the bundled icon is used (IconThemePath, plus a pixmap
-  for hosts that ignore it).
-
-Updates are event-driven: the tray changes when the daemon applies a change and
-re-reads the keyboard when the menu opens. There is no polling timer; at idle
-the daemon sleeps in `poll()` and makes no wakeups.
-
-| Desktop | Tray |
-|---|---|
-| KDE Plasma, COSMIC, Cinnamon, XFCE (with the Status Tray plugin), LXQt, Budgie, MATE | built in |
-| GNOME | needs the **AppIndicator and KStatusNotifierItem Support** extension (preinstalled on Ubuntu as "Ubuntu AppIndicators") |
-| No tray host (sway without waybar tray, etc.) | daemon logs "tray: not available" and keeps running hotkeys |
-
-### Fn combos (evdev + uinput, works on X11 and Wayland)
-
-The keyboard's firmware does nothing for Fn+key on its own. Pressing **Fn**
-sends `KEY_VOLUMEUP` (115) on the second input node (event5 here), and Fn+arrow
-then sends a plain arrow on the main node (event4). The daemon treats that
-Vol+ as an Fn modifier:
-
-| Combo | Action |
-|---|---|
-| Fn+Up / Fn+Right | speed faster (+1, 0–12; this is the pulse speed in Pulse mode) |
-| Fn+Down / Fn+Left | speed slower (−1) |
-| Fn+S | Steady |
-| Fn+O | Off |
-| Fn+P | Pulse |
-| Fn+F | Flash |
-
-The arrows are fixed to speed. The four mode keys are user-assignable in
-`[fn.modes]` (below) or in the GUI's **Fn mode keys** section (pick a key per
-mode, Save). Arrow keys and duplicates are rejected. The daemon reads the
-mapping **at startup**, so restart it after changing keys. No other Fn
-bindings exist; brightness is set from the tray, GUI or CLI.
-
-**Letters leak unless blocked.** Fn+letter sends the letter on the main
-typing node (event4). With `block-combo-keys = false` the daemon only
-observes that node, so the letter is also typed. Set
-`block-combo-keys = true` (or tick the tray's "Block arrow keys during Fn
-combos") so the daemon grabs event4 and re-emits everything except consumed
-combo keys through the "onn-rgb passthrough" uinput device; that needs write
-access to `/dev/uinput` (`udev/72-onn-uinput.rules`, see below).
-
-Fn arms for `window-ms` (400 ms, renewed by each combo) and disarms when
-released. Only presses act; autorepeat is ignored; each action is one HID
-write, done on a separate thread so typing is never delayed.
-
-`~/.config/onn-rgb/config.toml` (`onn-rgb config` prints the path):
-
-```toml
-[fn]
-key = "KEY_VOLUMEUP"
-window-ms = 400
-release-disarms = true    # set false if Fn+Up does nothing (keyboard sends Fn release instantly)
-grab = true               # hide Fn's Vol+ from the desktop (needs uinput, below)
-block-combo-keys = false  # also swallow the arrow/Insert/... of a combo
-
-[fn.modes]                # Fn+<key> selects a mode; "" = unbound
-steady = "KEY_S"
-off = "KEY_O"
-pulse = "KEY_P"
-flash = "KEY_F"
-```
-
-The old `[fn.keys]` table is ignored (with a warning). The
-older `[hotkeys]` section still binds plain keys (no Fn) to actions.
-
-**Grab and passthrough.** With `grab = true` the daemon grabs the Fn node
-(`EVIOCGRAB`) and re-emits everything except the Fn Vol+ through a virtual
-device named **"onn-rgb passthrough"**, so Fn no longer changes the volume.
-With `block-combo-keys` (or the tray checkbox) it grabs the main node too and
-drops only the keys consumed by a combo; Caps/Num Lock LEDs are forwarded back
-to the real keyboard. Grabs are released on exit, Quit, SIGTERM/SIGINT and
-crashes (the kernel drops a grab when the process dies). A grab is only taken
-when no key is held. If `/dev/uinput` can't be opened the daemon logs it, shows
-a desktop notification and runs **ungrabbed**: combos still work but Fn also
-raises the volume. The keyboard is never left dead. Side effect: a real Vol+
-key on this keyboard would act as Fn.
-
-**Hotplug and resume.** Nodes are reopened after replug or suspend from a
-kernel uevent (netlink) monitor, not by polling. Only one daemon runs at a time
-(lock in `$XDG_RUNTIME_DIR/onn-rgb.lock`).
-
-`onn-rgb listen-keys` prints every event with its value (1 press, 0 release,
-2 repeat), e.g. `/dev/input/event5: KEY_VOLUMEUP = 115 value 1 (press)`.
-
-**Permissions** (one time):
-
-- Input nodes: `udev/71-onn-keyboard-input.rules`.
-- uinput (for grab): `udev/72-onn-uinput.rules` plus `modules-load/onn-rgb.conf`
-  so the `uinput` module loads at boot:
-
-```sh
-sudo cp udev/71-onn-keyboard-input.rules udev/72-onn-uinput.rules /etc/udev/rules.d/
-sudo cp modules-load/onn-rgb.conf /etc/modules-load.d/
-sudo modprobe uinput && sudo udevadm control --reload && sudo udevadm trigger
-```
-
-- **systemd or elogind distros** (Fedora, Ubuntu/Pop!_OS, Debian, Arch,
-  openSUSE, Gentoo/Void/Alpine with elogind): the rules' `uaccess` tag gives
-  the logged-in seat user access.
-- **No logind** (Void/Alpine/Artix without elogind): `uaccess` does nothing;
-  the rules also set `GROUP="input", MODE="0660"`, so run
-  `sudo usermod -aG input $USER` and log in again. Without systemd,
-  `/etc/modules-load.d` may be ignored; load uinput via your init's module
-  list (e.g. `/etc/modules` on OpenRC/Alpine, `/etc/modules-load.d` is read by
-  Void's runit too) or `modprobe uinput` at boot. The same group applies to
-  the hidraw rule (`70-onn-keyboard.rules`).
-
-Note: input access lets the user read every key typed on this keyboard, and
-uinput lets them inject input. Skip these rules if you don't want hotkeys.
-
-### Desktop shortcut fallback
-
-Instead of (or in addition to) evdev hotkeys, bind these commands in your
-desktop's keyboard-shortcut settings (COSMIC: Settings > Keyboard >
-Keyboard shortcuts > Custom; GNOME: Settings > Keyboard > Custom Shortcuts;
-KDE: System Settings > Shortcuts > Custom; XFCE/Cinnamon: Keyboard >
-Shortcuts). Each prints the new state:
-
-```sh
-onn-rgb cycle-mode          # steady -> pulse -> flash -> off -> steady
-onn-rgb toggle              # off <-> last mode
-onn-rgb brightness up|down
-onn-rgb speed up|down
-```
-
-With the AppImage, use `/path/to/onn_Keyboard_Lighting-x86_64.AppImage cycle-mode` etc.
-
-### Starting the daemon at login
-
-`scripts/install-user.sh` (`cargo install` + config + the files below,
-with absolute paths) installs but does **not** enable anything. Pick one:
-
-- **XDG autostart (default, any desktop, no systemd needed):**
-  `cp ~/.local/share/onn-rgb/onn-rgb-daemon.desktop ~/.config/autostart/`
-  (disable: remove that copy from `~/.config/autostart/`)
-- **systemd user service (optional):**
-  `systemctl --user daemon-reload && systemctl --user enable --now onn-rgb.service`
-  (`~/.config/systemd/user/onn-rgb.service`; disable with `systemctl --user disable --now onn-rgb.service`)
-
-For the AppImage: `./onn_Keyboard_Lighting-x86_64.AppImage autostart-entry > ~/.config/autostart/onn-rgb-daemon.desktop`
-(or `systemd-unit > ~/.config/systemd/user/onn-rgb.service`); the entry points at the AppImage's current path.
-
-## Portability
-
-The binaries are built with `cargo zigbuild` against **glibc 2.28** and link
-only libc/libm/libgcc_s. The GUI loads Wayland/X11/EGL/OpenGL libraries at
-runtime from the system; they are deliberately not bundled, because GL
-drivers must match the host. So the AppImage needs glibc ≥ 2.28 (Debian 10+,
-Ubuntu 18.10+, Fedora 29+, RHEL/Alma/Rocky 8+, openSUSE Leap 15.2+, Arch) and
-a normal desktop graphics stack. `build-appimage.sh` uses zig from
-`~/.local/opt/zig-linux-x86_64-0.13.0` and `cargo install cargo-zigbuild`;
-without them it falls back to a native build and prints the glibc it needs.
-
-| | Status |
-|---|---|
-| Pop!_OS 24.04, COSMIC (Wayland) | **tested**: CLI, step actions, tray registration via D-Bus, GUI launch |
-| Fedora, Arch, Debian/Ubuntu, openSUSE; KDE, GNOME (+AppIndicator), Cinnamon, XFCE, X11 sessions | expected to work, not tested |
-| evdev hotkeys | implemented and unit-tested; not yet tested with real key presses |
