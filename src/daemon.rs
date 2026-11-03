@@ -419,6 +419,7 @@ pub fn run() -> ! {
         match tray.spawn() {
             Ok(handle) => {
                 log("tray: registered StatusNotifierItem");
+                let _ = File::create(crate::instance::tray_marker());
                 notify = Arc::new(move |f| {
                     handle.update(move |t| {
                         let mut s = Shown { settings: t.settings, error: t.error.clone(), status: Some(t.status.clone()) };
@@ -544,5 +545,6 @@ pub fn run() -> ! {
     }
     // Dropping the nodes ungrabs them and destroys the virtual devices.
     drop(inp);
+    let _ = std::fs::remove_file(crate::instance::tray_marker());
     std::process::exit(0)
 }

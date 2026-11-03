@@ -57,7 +57,7 @@ esac
 RUN
 chmod +x "$APPDIR/AppRun"
 
-OUT=dist/onn_Keyboard_Lighting-x86_64.AppImage
+OUT=${OUT:-dist/onn_Keyboard_Lighting-x86_64.AppImage}
 EXTRA=()
 [ -e /dev/fuse ] && command -v fusermount >/dev/null || EXTRA=(--appimage-extract-and-run)
 ARCH=x86_64 "$TOOL" "${EXTRA[@]}" "$APPDIR" "$OUT"

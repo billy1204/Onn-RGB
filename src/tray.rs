@@ -283,8 +283,10 @@ impl ksni::Tray for OnnTray {
             StandardItem {
                 label: "Quit".into(),
                 icon_name: "application-exit".into(),
-                // Goes through the SIGTERM path so grabs are released cleanly.
+                // Close the GUI window too, then exit through the SIGTERM
+                // path so grabs are released cleanly.
                 activate: Box::new(|_| unsafe {
+                    crate::instance::send_gui("quit");
                     libc::kill(libc::getpid(), libc::SIGTERM);
                 }),
                 ..Default::default()
@@ -297,7 +299,12 @@ impl ksni::Tray for OnnTray {
     /// Keep running if the tray host (e.g. panel) goes away; it may come back.
     fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
         eprintln!("onn-rgb: tray host went away ({reason:?}); hotkeys keep working");
+        let _ = std::fs::remove_file(crate::instance::tray_marker());
         true
+    }
+
+    fn watcher_online(&self) {
+        let _ = std::fs::File::create(crate::instance::tray_marker());
     }
 }
 

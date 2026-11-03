@@ -2,6 +2,13 @@
 use eframe::egui;
 use onn_rgb::fnkeys::mode_key_conflict;
 use onn_rgb::hotkeys::{key_name, NAMES};
+use onn_rgb::instance;
+use std::io::Read;
+use std::os::unix::net::UnixListener;
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use onn_rgb::{config, Keyboard, Mode, Settings, MAX_BRIGHTNESS, MAX_SPEED};
 
 struct App {
@@ -165,13 +172,129 @@ impl eframe::App for App {
     }
 }
 
+/// Set when the tray's Quit closed this window (skip the "still running" hint).
+static QUIT_FROM_TRAY: AtomicBool = AtomicBool::new(false);
+
+/// Commands from a second launch ("show") or the tray's Quit ("quit").
+fn listen(l: UnixListener, ctx: egui::Context) {
+    for conn in l.incoming() {
+        let Ok(mut c) = conn else { continue };
+        let mut buf = String::new();
+        let _ = c.read_to_string(&mut buf);
+        match buf.trim() {
+            "show" => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                    egui::UserAttentionType::Informational,
+                ));
+            }
+            "quit" => {
+                QUIT_FROM_TRAY.store(true, Ordering::SeqCst);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            _ => {}
+        }
+        ctx.request_repaint();
+    }
+}
+
+/// Start the tray daemon in the background if none is running, so the app
+/// keeps running in the tray after this window closes.
+fn start_daemon_if_needed() -> Option<Child> {
+    if instance::daemon_running() {
+        return None;
+    }
+    let mut cmd = match std::env::var_os("APPIMAGE") {
+        Some(a) => Command::new(a),
+        None => {
+            let sib = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("onn-rgb")));
+            Command::new(sib.filter(|p| p.exists()).map(|p| p.into_os_string()).unwrap_or_else(|| "onn-rgb".into()))
+        }
+    };
+    cmd.arg("daemon").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // Own session: closing the terminal or this window doesn't take it down.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    match cmd.spawn() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("onn-rgb-gui: can't start the tray daemon: {e}");
+            None
+        }
+    }
+}
+
+/// After the window closes: stay in the tray if there is one; otherwise stop
+/// the daemon we started, so nothing is left running with no way to reach it.
+fn after_close(started: Option<Child>, started_at: Instant) {
+    if QUIT_FROM_TRAY.load(Ordering::SeqCst) {
+        return;
+    }
+    // A daemon we just started may still be registering its tray icon.
+    if started.is_some() {
+        while !instance::tray_present() && started_at.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    if instance::tray_present() {
+        first_close_hint();
+    } else if let Some(mut c) = started {
+        unsafe { libc::kill(c.id() as libc::pid_t, libc::SIGTERM) };
+        let _ = c.wait();
+    }
+}
+
+fn first_close_hint() {
+    let Some(flag) = config::path().and_then(|p| p.parent().map(|d| d.join("tray-hint-shown"))) else { return };
+    if flag.exists() {
+        return;
+    }
+    let _ = std::process::Command::new("notify-send")
+        .args(["-a", "onn-rgb", "-i", "input-keyboard", "onn Keyboard Lighting",
+               "Still running in the tray. Right-click the tray icon and choose Quit to exit."])
+        .status();
+    let _ = std::fs::write(flag, "");
+}
+
 fn main() -> eframe::Result {
+    // Single window: a second launch brings the running one forward.
+    let Some(_gui_lock) = instance::try_lock(&instance::gui_lock_path()) else {
+        if !instance::send_gui("show") {
+            eprintln!("onn-rgb-gui: another window is already open");
+        }
+        return Ok(());
+    };
+    let sock = instance::gui_socket();
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(&sock).ok();
+    let started_at = Instant::now();
+    let started = start_daemon_if_needed();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("onn Keyboard Lighting")
+            .with_app_id("onn-rgb")
             .with_inner_size([380.0, 260.0])
             .with_resizable(false),
         ..Default::default()
     };
-    eframe::run_native("onn-rgb", options, Box::new(|_| Ok(Box::new(App::new()))))
+    let res = eframe::run_native(
+        "onn-rgb",
+        options,
+        Box::new(move |cc| {
+            if let Some(l) = listener {
+                let ctx = cc.egui_ctx.clone();
+                std::thread::spawn(move || listen(l, ctx));
+            }
+            Ok(Box::new(App::new()))
+        }),
+    );
+    let _ = std::fs::remove_file(&sock);
+    after_close(started, started_at);
+    res
 }
