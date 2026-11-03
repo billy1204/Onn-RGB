@@ -1,6 +1,6 @@
 [package]
 name = "onn-rgb"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Linux lighting control for the onn 104-key LED Gaming Keyboard (USB 3938:1296)"
 license = "MIT"
