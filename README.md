@@ -126,6 +126,10 @@ on a separate input node, and the onn-rgb daemon turns Fn+key into lighting comm
 
 More detail: [docs/DETAILS.md](docs/DETAILS.md).
 
+## Fixed
+
+- **Off mode now turns the lights off (Nov 2026).** The off value used to be `0F`, which this keyboard just shows as steady, so Fn+O did the same thing as Fn+S. Testing on the keyboard showed `0B` is the real off value. Values `03`–`0A` and `FF` all stay steady. Fn+O, `onn-rgb mode off` and the tray/GUI Off now all work. The fix is in the v0.2 release AppImage.
+
 ## Known issues
 
 - **Fn+letter also types the letter** unless the optional uinput rule (`72-onn-uinput.rules`) is installed and `block-combo-keys` is turned on.
