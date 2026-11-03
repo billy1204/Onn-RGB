@@ -1,6 +1,6 @@
 use onn_rgb::actions::{self, Action};
 use onn_rgb::{config, hotkeys};
-use onn_rgb::{Keyboard, Mode, MAX_BRIGHTNESS, MAX_MODE, MAX_SPEED};
+use onn_rgb::{Keyboard, Mode, MAX_BRIGHTNESS, MAX_SPEED};
 use std::process::exit;
 
 fn usage() -> ! {
@@ -9,15 +9,15 @@ fn usage() -> ! {
 
 usage:
   onn-rgb status
-  onn-rgb mode <pulse|steady|off|0-{MAX_MODE}>
+  onn-rgb mode <steady|off|pulse|flash>   (\"force\" = steady)
   onn-rgb brightness <0-{MAX_BRIGHTNESS}>
   onn-rgb speed <0-{MAX_SPEED}>          (0 = slowest)
   onn-rgb set [--mode M] [--brightness N] [--speed N]
 
 step actions (bind these in your desktop's keyboard-shortcut settings):
-  onn-rgb cycle-mode                    (pulse -> steady -> off -> pulse)
+  onn-rgb cycle-mode                    (steady -> pulse -> flash -> off)
   onn-rgb toggle                        (off <-> last mode)
-  onn-rgb mode-steady | mode-pulse
+  onn-rgb mode-steady | mode-off | mode-pulse | mode-flash
   onn-rgb brightness <up|down>
   onn-rgb speed <up|down>
 
@@ -45,7 +45,10 @@ fn main() {
         (Some("cycle-mode"), _) => Some(Action::CycleMode),
         (Some("toggle"), _) => Some(Action::Toggle),
         (Some("mode-steady"), _) => Some(Action::ModeSteady),
+        (Some("mode-force"), _) => Some(Action::ModeSteady),
         (Some("mode-pulse"), _) => Some(Action::ModePulse),
+        (Some("mode-flash"), _) => Some(Action::ModeFlash),
+        (Some("mode-off"), _) => Some(Action::ModeOff),
         (Some("brightness"), Some("up")) => Some(Action::BrightnessUp),
         (Some("brightness"), Some("down")) => Some(Action::BrightnessDown),
         (Some("speed"), Some("up")) => Some(Action::SpeedUp),

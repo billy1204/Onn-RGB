@@ -1,7 +1,8 @@
 //! `~/.config/onn-rgb/config.toml`: hotkey bindings for `onn-rgb daemon`.
 
 use crate::actions::Action;
-use crate::fnkeys::FnConfig;
+use crate::fnkeys::{self, FnConfig, DEFAULT_MODE_KEYS};
+use crate::Mode;
 use crate::hotkeys::{key_code, key_name};
 use std::time::Duration;
 use std::fs;
@@ -49,18 +50,17 @@ grab = true
 # apps. (Tray: "Block arrow keys during Fn combos".)
 block-combo-keys = false
 
-# Key pressed while Fn is armed -> action. Replaces the defaults if present.
-[fn.keys]
-KEY_UP = "brightness-up"
-KEY_DOWN = "brightness-down"
-KEY_RIGHT = "speed-up"
-KEY_LEFT = "speed-down"
-KEY_INSERT = "cycle-mode"
-KEY_HOME = "mode-steady"
-KEY_PAGEUP = "mode-pulse"
-KEY_DELETE = "toggle"
-KEY_END = "toggle"
-KEY_PAGEDOWN = "cycle-mode"
+# Fn+Up / Fn+Right = speed faster, Fn+Down / Fn+Left = slower (fixed; in
+# Pulse mode this is the pulse speed). Fn+<key> below selects a mode. Use a
+# key name from `onn-rgb listen-keys` (or a number); "" = unbound. Arrow keys
+# and duplicates are rejected. Also editable in the GUI ("Fn mode keys").
+# Letter keys come from the main node, so set block-combo-keys = true to stop
+# Fn+P etc. from also typing the letter. Restart the daemon after changes.
+[fn.modes]
+steady = "KEY_S"
+off = "KEY_O"
+pulse = "KEY_P"
+flash = "KEY_F"
 "#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +70,8 @@ pub struct Config {
     pub tray_enabled: bool,
     pub notices: bool,
     pub fn_cfg: FnConfig,
+    /// Fn mode keys as configured (before conflict filtering).
+    pub mode_keys: Vec<(Mode, u16)>,
     pub grab: bool,
     pub block_combo_keys: bool,
 }
@@ -82,6 +84,7 @@ impl Default for Config {
             tray_enabled: true,
             notices: true,
             fn_cfg: FnConfig::default(),
+            mode_keys: DEFAULT_MODE_KEYS.to_vec(),
             grab: true,
             block_combo_keys: false,
         }
@@ -143,22 +146,94 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
                 ("release-disarms", toml::Value::Boolean(b)) => c.fn_cfg.release_disarms = *b,
                 ("grab", toml::Value::Boolean(b)) => c.grab = *b,
                 ("block-combo-keys" | "block_combo_keys", toml::Value::Boolean(b)) => c.block_combo_keys = *b,
-                ("keys", toml::Value::Table(keys)) => {
-                    c.fn_cfg.map.clear();
-                    for (kn, an) in keys {
-                        let code = kn.parse::<u16>().ok().or_else(|| key_code(kn));
-                        let act = an.as_str().and_then(Action::parse);
-                        match (code, act) {
-                            (Some(code), Some(a)) => c.fn_cfg.map.push((code, a)),
-                            _ => warn.push(format!("fn.keys: can't use {kn} = {an:?}")),
+                ("keys", _) => warn.push("fn.keys is no longer used (Fn+arrows = speed); set mode keys in [fn.modes]".into()),
+                ("modes", toml::Value::Table(t)) => {
+                    let mut keys = DEFAULT_MODE_KEYS.to_vec();
+                    for (mn, kv) in t {
+                        let Some(m) = Mode::parse(mn) else {
+                            warn.push(format!("fn.modes: unknown mode `{mn}` (steady, off, pulse, flash)"));
+                            continue;
+                        };
+                        let code = match kv {
+                            toml::Value::String(s) if s.trim().is_empty() => {
+                                keys.retain(|(o, _)| *o != m);
+                                continue;
+                            }
+                            toml::Value::String(s) => key_code(s),
+                            toml::Value::Integer(n) => u16::try_from(*n).ok(),
+                            _ => None,
+                        };
+                        match code {
+                            Some(k) => {
+                                keys.retain(|(o, _)| *o != m);
+                                keys.push((m, k));
+                            }
+                            None => warn.push(format!("fn.modes: can't use {mn} = {kv:?}")),
                         }
                     }
+                    keys.sort_by_key(|(m, _)| Mode::ALL.iter().position(|o| o == m));
+                    c.mode_keys = keys;
                 }
                 _ => warn.push(format!("fn: unknown or bad setting `{k}`")),
             }
         }
     }
+    let (map, w) = fnkeys::build_map(&c.mode_keys);
+    c.fn_cfg.map = map;
+    warn.extend(w.into_iter().map(|w| format!("fn.modes: {w}")));
     Ok((c, warn))
+}
+
+/// Check and save Fn mode keys (from the GUI) as the `[fn.modes]` section.
+pub fn save_mode_keys(keys: &[(Mode, u16)]) -> Result<(), String> {
+    for &(m, k) in keys {
+        if let Some(e) = fnkeys::mode_key_conflict(keys, m, k) {
+            return Err(e);
+        }
+    }
+    let p = path().ok_or("HOME not set")?;
+    let text = fs::read_to_string(&p).unwrap_or_else(|_| TEMPLATE.to_string());
+    let s = set_modes(&text, keys);
+    if let Some(d) = p.parent() {
+        fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    fs::write(&p, s).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// Replace (or append) the `[fn.modes]` section, keeping everything else.
+fn set_modes(text: &str, keys: &[(Mode, u16)]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut skip = false;
+    let mut at = None;
+    for l in text.lines() {
+        let t = l.trim();
+        if t.starts_with('[') {
+            skip = t == "[fn.modes]";
+            if skip && at.is_none() {
+                at = Some(out.len());
+            }
+        }
+        if !skip {
+            out.push(l.to_string());
+        }
+    }
+    let mut sec = vec!["[fn.modes]".to_string()];
+    for m in Mode::ALL {
+        let v = keys.iter().find(|(o, _)| *o == m).map(|(_, k)| key_name(*k)).unwrap_or_default();
+        sec.push(format!("{} = \"{v}\"", m.name()));
+    }
+    match at {
+        Some(i) => {
+            out.splice(i..i, sec);
+        }
+        None => {
+            out.push(String::new());
+            out.extend(sec);
+        }
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
 }
 
 /// Persist `block-combo-keys` (from the tray) with a minimal text edit.
@@ -277,11 +352,34 @@ mod tests {
 
     #[test]
     fn fn_section() {
-        let (c, w) = parse("[fn]\nwindow-ms = 400\nrelease-disarms = false\nblock-combo-keys = true\n[fn.keys]\nKEY_F1 = \"toggle\"\n").unwrap();
-        assert!(w.is_empty(), "{w:?}");
+        let (c, w) = parse("[fn]\nwindow-ms = 400\nrelease-disarms = false\nblock-combo-keys = true\n[fn.modes]\nflash = \"KEY_F1\"\noff = \"\"\npulse = \"KEY_UP\"\nrainbow = \"KEY_A\"\n").unwrap();
+        assert_eq!(w.len(), 2, "{w:?}"); // unknown mode, arrow conflict
         assert_eq!(c.fn_cfg.window, Duration::from_millis(400));
-        assert_eq!(c.fn_cfg.window, FnConfig::default().window);
         assert!(!c.fn_cfg.release_disarms && c.block_combo_keys && c.grab);
-        assert_eq!(c.fn_cfg.map, vec![(59, Action::Toggle)]);
+        assert!(c.fn_cfg.map.contains(&(59, Action::ModeFlash)));
+        assert!(c.fn_cfg.map.contains(&(31, Action::ModeSteady)));
+        assert!(!c.fn_cfg.map.iter().any(|(_, a)| *a == Action::ModeOff || *a == Action::ModePulse));
+        assert!(c.fn_cfg.map.contains(&(103, Action::SpeedUp)));
+    }
+
+    #[test]
+    fn old_fn_keys_ignored() {
+        let (c, w) = parse("[fn.keys]\nKEY_UP = \"brightness-up\"\n").unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!(c.fn_cfg, FnConfig::default());
+    }
+
+    #[test]
+    fn set_modes_round_trip() {
+        let keys = vec![(Mode::Steady, 59), (Mode::Pulse, 25)];
+        let s = set_modes(TEMPLATE, &keys);
+        assert_eq!(s.matches("[fn.modes]").count(), 1);
+        let (c, w) = parse(&s).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(c.mode_keys.len(), 2);
+        assert!(c.fn_cfg.map.contains(&(59, Action::ModeSteady)));
+        let s2 = set_modes("[tray]\nnotices = true\n", &keys);
+        assert!(s2.starts_with("[tray]\nnotices = true\n\n[fn.modes]\nsteady = \"KEY_F1\"\n"));
+        assert!(save_mode_keys(&[(Mode::Off, 105)]).is_err());
     }
 }

@@ -16,10 +16,12 @@ pub enum Action {
     SpeedDown,
     ModeSteady,
     ModePulse,
+    ModeFlash,
+    ModeOff,
 }
 
 impl Action {
-    pub const ALL: [Action; 8] = [
+    pub const ALL: [Action; 10] = [
         Action::CycleMode,
         Action::Toggle,
         Action::BrightnessUp,
@@ -28,6 +30,8 @@ impl Action {
         Action::SpeedDown,
         Action::ModeSteady,
         Action::ModePulse,
+        Action::ModeFlash,
+        Action::ModeOff,
     ];
 
     pub fn name(self) -> &'static str {
@@ -40,11 +44,26 @@ impl Action {
             Action::SpeedDown => "speed-down",
             Action::ModeSteady => "mode-steady",
             Action::ModePulse => "mode-pulse",
+            Action::ModeFlash => "mode-flash",
+            Action::ModeOff => "mode-off",
         }
     }
 
     pub fn parse(s: &str) -> Option<Action> {
+        if s == "mode-force" {
+            return Some(Action::ModeSteady);
+        }
         Action::ALL.into_iter().find(|a| a.name() == s)
+    }
+
+    /// The action that selects `m`.
+    pub fn select(m: Mode) -> Action {
+        match m {
+            Mode::Steady => Action::ModeSteady,
+            Mode::Off => Action::ModeOff,
+            Mode::Pulse => Action::ModePulse,
+            Mode::Flash => Action::ModeFlash,
+        }
     }
 }
 
@@ -78,9 +97,10 @@ pub fn next(s: Settings, a: Action, toggle_to: Mode) -> Settings {
     match a {
         Action::CycleMode => {
             n.mode = match s.mode {
-                Mode::Pulse => Mode::Steady,
-                Mode::Steady => Mode::Off,
-                _ => Mode::Pulse,
+                Mode::Steady => Mode::Pulse,
+                Mode::Pulse => Mode::Flash,
+                Mode::Flash => Mode::Off,
+                Mode::Off => Mode::Steady,
             }
         }
         Action::Toggle => n.mode = if s.mode == Mode::Off { toggle_to } else { Mode::Off },
@@ -90,6 +110,8 @@ pub fn next(s: Settings, a: Action, toggle_to: Mode) -> Settings {
         Action::SpeedDown => n.speed = s.speed.saturating_sub(1),
         Action::ModeSteady => n.mode = Mode::Steady,
         Action::ModePulse => n.mode = Mode::Pulse,
+        Action::ModeFlash => n.mode = Mode::Flash,
+        Action::ModeOff => n.mode = Mode::Off,
     }
     n
 }
@@ -138,9 +160,12 @@ mod tests {
         assert_eq!(next(s, Action::BrightnessDown, Mode::Steady).brightness, 2);
         assert_eq!(next(s, Action::SpeedUp, Mode::Steady).speed, 12);
         assert_eq!(next(st(Mode::Steady, 0, 0), Action::SpeedDown, Mode::Steady).speed, 0);
-        assert_eq!(next(s, Action::CycleMode, Mode::Steady).mode, Mode::Off);
-        assert_eq!(next(st(Mode::Off, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Pulse);
-        assert_eq!(next(st(Mode::Pulse, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Steady);
+        assert_eq!(next(s, Action::CycleMode, Mode::Steady).mode, Mode::Pulse);
+        assert_eq!(next(st(Mode::Pulse, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Flash);
+        assert_eq!(next(st(Mode::Flash, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Off);
+        assert_eq!(next(st(Mode::Off, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Steady);
+        assert_eq!(next(st(Mode::Pulse, 3, 4), Action::SpeedUp, Mode::Steady).speed, 5);
+        assert_eq!(next(st(Mode::Pulse, 3, 4), Action::ModeFlash, Mode::Steady).mode, Mode::Flash);
         assert_eq!(next(s, Action::Toggle, Mode::Steady).mode, Mode::Off);
         assert_eq!(next(st(Mode::Off, 3, 4), Action::Toggle, Mode::Pulse).mode, Mode::Pulse);
     }

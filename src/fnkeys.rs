@@ -8,6 +8,7 @@
 //! release are not forwarded (relevant only when that node is grabbed).
 
 use crate::actions::Action;
+use crate::Mode;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -27,25 +28,56 @@ pub struct FnConfig {
     pub map: Vec<(u16, Action)>,
 }
 
+/// Fn+arrow keys: fixed to speed (Up/Right faster, Down/Left slower).
+pub const SPEED_KEYS: [(u16, Action); 4] = [
+    (103, Action::SpeedUp),   // KEY_UP
+    (106, Action::SpeedUp),   // KEY_RIGHT
+    (108, Action::SpeedDown), // KEY_DOWN
+    (105, Action::SpeedDown), // KEY_LEFT
+];
+
+/// Default Fn mode keys: S = steady, O = off, P = pulse, F = flash.
+pub const DEFAULT_MODE_KEYS: [(Mode, u16); 4] = [
+    (Mode::Steady, 31), // KEY_S
+    (Mode::Off, 24),    // KEY_O
+    (Mode::Pulse, 25),  // KEY_P
+    (Mode::Flash, 33),  // KEY_F
+];
+
+/// Build the Fn map from mode keys (speed arrows are always included).
+/// Arrow keys and duplicates are rejected; returns the map and warnings.
+pub fn build_map(modes: &[(Mode, u16)]) -> (Vec<(u16, Action)>, Vec<String>) {
+    let mut map: Vec<(u16, Action)> = SPEED_KEYS.to_vec();
+    let mut warn = Vec::new();
+    for &(m, k) in modes {
+        if let Some(err) = mode_key_conflict(modes, m, k) {
+            warn.push(err);
+            continue;
+        }
+        map.push((k, Action::select(m)));
+    }
+    (map, warn)
+}
+
+/// Why `k` can't be the Fn key for mode `m`, if it can't.
+pub fn mode_key_conflict(modes: &[(Mode, u16)], m: Mode, k: u16) -> Option<String> {
+    let name = crate::hotkeys::key_name(k);
+    if SPEED_KEYS.iter().any(|(c, _)| *c == k) {
+        return Some(format!("{m}: {name} is reserved for Fn speed control"));
+    }
+    if let Some((o, _)) = modes.iter().find(|(o, c)| *c == k && *o != m) {
+        return Some(format!("{m}: {name} is already used by {o}"));
+    }
+    None
+}
+
 impl Default for FnConfig {
     fn default() -> Self {
-        use Action::*;
         FnConfig {
             key: 115, // KEY_VOLUMEUP
             window: Duration::from_millis(400),
             release_disarms: true,
-            map: vec![
-                (103, BrightnessUp),   // KEY_UP
-                (108, BrightnessDown), // KEY_DOWN
-                (106, SpeedUp),        // KEY_RIGHT
-                (105, SpeedDown),      // KEY_LEFT
-                (110, CycleMode),      // KEY_INSERT
-                (102, ModeSteady),     // KEY_HOME
-                (104, ModePulse),      // KEY_PAGEUP
-                (111, Toggle),         // KEY_DELETE
-                (107, Toggle),         // KEY_END
-                (109, CycleMode),      // KEY_PAGEDOWN
-            ],
+            map: build_map(&DEFAULT_MODE_KEYS).0,
         }
     }
 }
@@ -130,7 +162,7 @@ mod tests {
         let mut e = eng();
         let t = Instant::now();
         assert_eq!(e.key(Origin::FnNode, FN, 1, t), Out { forward: false, action: None });
-        assert_eq!(e.key(Origin::Main, UP, 1, t), Out { forward: false, action: Some(BrightnessUp) });
+        assert_eq!(e.key(Origin::Main, UP, 1, t), Out { forward: false, action: Some(SpeedUp) });
         assert_eq!(e.key(Origin::Main, UP, 2, t), Out { forward: false, action: None }); // repeat ignored
         assert_eq!(e.key(Origin::FnNode, FN, 0, t), Out { forward: false, action: None });
         assert_eq!(e.key(Origin::Main, UP, 0, t), Out { forward: false, action: None }); // consumed release
@@ -165,7 +197,7 @@ mod tests {
         let t = Instant::now();
         e.key(Origin::FnNode, FN, 1, t);
         e.key(Origin::FnNode, FN, 2, t + Duration::from_millis(350));
-        assert_eq!(e.key(Origin::Main, 110, 1, t + Duration::from_millis(700)).action, Some(CycleMode));
+        assert_eq!(e.key(Origin::Main, 25, 1, t + Duration::from_millis(700)).action, Some(ModePulse));
     }
 
     #[test]
@@ -174,7 +206,7 @@ mod tests {
         let t = Instant::now();
         e.key(Origin::FnNode, FN, 1, t);
         e.key(Origin::FnNode, FN, 0, t);
-        assert_eq!(e.key(Origin::Main, 102, 1, t).action, Some(ModeSteady));
+        assert_eq!(e.key(Origin::Main, 31, 1, t).action, Some(ModeSteady));
     }
 
     #[test]
@@ -185,6 +217,17 @@ mod tests {
         e.key(Origin::FnNode, FN, 1, t);
         assert_eq!(e.key(Origin::Main, 30, 1, t), Out { forward: true, action: None }); // KEY_A
         assert_eq!(e.key(Origin::FnNode, 164, 1, t), Out { forward: true, action: None }); // play/pause
+    }
+
+    #[test]
+    fn default_map_is_speed_and_modes_only() {
+        let m = FnConfig::default().map;
+        assert_eq!(m.len(), 8);
+        assert!(m.contains(&(103, SpeedUp)) && m.contains(&(105, SpeedDown)));
+        assert!(m.contains(&(33, ModeFlash)) && m.contains(&(24, ModeOff)));
+        let (m2, w) = build_map(&[(Mode::Pulse, 103), (Mode::Off, 24), (Mode::Flash, 24)]);
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert_eq!(m2.len(), 4);
     }
 
     #[test]

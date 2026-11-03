@@ -3,7 +3,7 @@
 //! the daemon's worker pushes new state after every change.
 //!
 //! Flat menu (no submenus):
-//!   status lines / Mode label + Pulse/Steady/Off radios / Brightness label +
+//!   status lines / Mode label + Steady/Off/Pulse/Flash radios / Brightness label +
 //!   0-3 radios / "Speed N/12" label + Faster, Slower / checkboxes / Open GUI /
 //!   Quit. Left-click toggles Off <-> last mode.
 
@@ -184,12 +184,7 @@ impl ksni::Tray for OnnTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let s = self.settings;
         let enabled = s.is_some();
-        let mode_idx = match s.map(|s| s.mode) {
-            Some(Mode::Pulse) => 0,
-            Some(Mode::Steady) => 1,
-            Some(Mode::Off) => 2,
-            _ => usize::MAX,
-        };
+        let mode_idx = s.and_then(|s| Mode::ALL.iter().position(|m| *m == s.mode)).unwrap_or(usize::MAX);
         let radio = |labels: Vec<String>| -> Vec<RadioItem> {
             labels.into_iter().map(|label| RadioItem { label, enabled, ..Default::default() }).collect()
         };
@@ -210,8 +205,8 @@ impl ksni::Tray for OnnTray {
             label("Mode".into()),
             RadioGroup {
                 selected: mode_idx,
-                select: Box::new(|t: &mut Self, i| t.send(Cmd::SetMode(Mode::NAMED[i]))),
-                options: radio(vec!["Pulse".into(), "Steady".into(), "Off".into()]),
+                select: Box::new(|t: &mut Self, i| t.send(Cmd::SetMode(Mode::ALL[i]))),
+                options: radio(Mode::ALL.iter().map(|m| m.label().to_string()).collect()),
             }
             .into(),
             MenuItem::Separator,

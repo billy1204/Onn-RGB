@@ -6,7 +6,7 @@ Windows-only; this replaces it on Linux with a small CLI and GUI written in Rust
 
 ## Features
 
-- Modes: **pulse**, **steady**, **off** (plus raw mode numbers for experimenting)
+- Modes: **steady** (alias `force`), **off**, **pulse**, **flash** — the only four the keyboard has
 - Brightness: 0–3
 - Effect speed: 0 (slowest) – 12 (fastest)
 - No runtime dependencies: talks to the keyboard directly via `/dev/hidraw`
@@ -58,7 +58,7 @@ report ID 4, 64-byte reports):
 | 8+ | data |
 
 Config offsets: `01` mode, `02` brightness, `03` speed (stored inverted).
-Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0F` off.
+Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0F` off. Any other value read back is treated as steady.
 
 Fn lighting shortcuts only work under Windows, where the vendor software
 handles them; under Linux those keys send media keys.
@@ -98,7 +98,7 @@ can't read the keyboard, the tray still works.
 ### Tray
 
 A StatusNotifierItem (via the pure-Rust `ksni` crate, no libdbus needed) with a
-flat menu: Mode (Pulse/Steady/Off) and Brightness (0-3) radio items, "Speed
+flat menu: Mode (Steady/Off/Pulse/Flash) and Brightness (0-3) radio items, "Speed
 N/12" with Faster/Slower, and checkboxes for **Show change notices**, **Block
 arrow keys during Fn combos** and **Start at login**, then Open GUI and Quit.
 **Left-click toggles the lighting off and back to the last mode.**
@@ -130,12 +130,26 @@ Vol+ as an Fn modifier:
 
 | Combo | Action |
 |---|---|
-| Fn+Up / Fn+Down | brightness +1 / -1 (0–3) |
-| Fn+Right / Fn+Left | speed +1 / -1 (0–12) |
-| Fn+Insert, Fn+PageDown | cycle mode Pulse → Steady → Off |
-| Fn+Home | Steady |
-| Fn+PageUp | Pulse |
-| Fn+Delete, Fn+End | toggle Off / last mode |
+| Fn+Up / Fn+Right | speed faster (+1, 0–12; this is the pulse speed in Pulse mode) |
+| Fn+Down / Fn+Left | speed slower (−1) |
+| Fn+S | Steady |
+| Fn+O | Off |
+| Fn+P | Pulse |
+| Fn+F | Flash |
+
+The arrows are fixed to speed. The four mode keys are user-assignable in
+`[fn.modes]` (below) or in the GUI's **Fn mode keys** section (pick a key per
+mode, Save). Arrow keys and duplicates are rejected. The daemon reads the
+mapping **at startup**, so restart it after changing keys. No other Fn
+bindings exist; brightness is set from the tray, GUI or CLI.
+
+**Letters leak unless blocked.** Fn+letter sends the letter on the main
+typing node (event4). With `block-combo-keys = false` the daemon only
+observes that node, so the letter is also typed. Set
+`block-combo-keys = true` (or tick the tray's "Block arrow keys during Fn
+combos") so the daemon grabs event4 and re-emits everything except consumed
+combo keys through the "onn-rgb passthrough" uinput device; that needs write
+access to `/dev/uinput` (`udev/72-onn-uinput.rules`, see below).
 
 Fn arms for `window-ms` (400 ms, renewed by each combo) and disarms when
 released. Only presses act; autorepeat is ignored; each action is one HID
@@ -151,22 +165,15 @@ release-disarms = true    # set false if Fn+Up does nothing (keyboard sends Fn r
 grab = true               # hide Fn's Vol+ from the desktop (needs uinput, below)
 block-combo-keys = false  # also swallow the arrow/Insert/... of a combo
 
-[fn.keys]
-KEY_UP = "brightness-up"
-KEY_DOWN = "brightness-down"
-KEY_RIGHT = "speed-up"
-KEY_LEFT = "speed-down"
-KEY_INSERT = "cycle-mode"
-KEY_HOME = "mode-steady"
-KEY_PAGEUP = "mode-pulse"
-KEY_DELETE = "toggle"
-KEY_END = "toggle"
-KEY_PAGEDOWN = "cycle-mode"
+[fn.modes]                # Fn+<key> selects a mode; "" = unbound
+steady = "KEY_S"
+off = "KEY_O"
+pulse = "KEY_P"
+flash = "KEY_F"
 ```
 
-Actions: `cycle-mode`, `toggle`, `brightness-up`, `brightness-down`,
-`speed-up`, `speed-down`, `mode-steady`, `mode-pulse`. The older `[hotkeys]`
-section still binds plain keys (no Fn) to actions.
+The old `[fn.keys]` table is ignored (with a warning). The
+older `[hotkeys]` section still binds plain keys (no Fn) to actions.
 
 **Grab and passthrough.** With `grab = true` the daemon grabs the Fn node
 (`EVIOCGRAB`) and re-emits everything except the Fn Vol+ through a virtual
@@ -222,7 +229,7 @@ KDE: System Settings > Shortcuts > Custom; XFCE/Cinnamon: Keyboard >
 Shortcuts). Each prints the new state:
 
 ```sh
-onn-rgb cycle-mode          # pulse -> steady -> off -> pulse
+onn-rgb cycle-mode          # steady -> pulse -> flash -> off -> steady
 onn-rgb toggle              # off <-> last mode
 onn-rgb brightness up|down
 onn-rgb speed up|down

@@ -17,9 +17,7 @@ pub fn text(kind: Kind, s: Settings) -> String {
     match kind {
         Kind::Mode => match s.mode {
             Mode::Off => "Lighting off".into(),
-            Mode::Pulse => "Mode: Pulse".into(),
-            Mode::Steady => "Mode: Steady".into(),
-            m => format!("Mode: {m}"),
+            m => format!("Mode: {}", m.label()),
         },
         Kind::Brightness => {
             let lim = match s.brightness {

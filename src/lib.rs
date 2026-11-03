@@ -41,55 +41,69 @@ const OFF_SPEED: u8 = 0x03;
 pub const MAX_BRIGHTNESS: u8 = 3;
 /// Highest user-facing speed (0 = slowest). The firmware stores it inverted.
 pub const MAX_SPEED: u8 = 12;
-/// Highest raw mode number accepted.
-pub const MAX_MODE: u8 = 15;
-
-/// Named lighting modes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The keyboard's four lighting modes. Raw values: `00` pulse, `01` steady,
+/// `02` flash, `0F` off. Any other value read back is shown as Steady.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
-    Pulse,
     Steady,
     Off,
-    Raw(u8),
+    Pulse,
+    Flash,
 }
 
 impl Mode {
-    pub const NAMED: [Mode; 3] = [Mode::Pulse, Mode::Steady, Mode::Off];
+    pub const ALL: [Mode; 4] = [Mode::Steady, Mode::Off, Mode::Pulse, Mode::Flash];
 
+    /// Unknown raw values (old firmware/experiments) fall back to Steady.
     pub fn from_raw(v: u8) -> Mode {
         match v {
             0 => Mode::Pulse,
-            1 => Mode::Steady,
+            2 => Mode::Flash,
             15 => Mode::Off,
-            n => Mode::Raw(n),
+            _ => Mode::Steady,
         }
     }
     pub fn raw(self) -> u8 {
         match self {
             Mode::Pulse => 0,
             Mode::Steady => 1,
+            Mode::Flash => 2,
             Mode::Off => 15,
-            Mode::Raw(n) => n,
         }
     }
+    /// Parse a mode name; "force" is an alias for steady.
     pub fn parse(s: &str) -> Option<Mode> {
-        match s.to_ascii_lowercase().as_str() {
-            "pulse" => Some(Mode::Pulse),
-            "steady" => Some(Mode::Steady),
+        match s.trim().to_ascii_lowercase().as_str() {
+            "steady" | "force" => Some(Mode::Steady),
             "off" => Some(Mode::Off),
-            n => n.parse().ok().filter(|v| *v <= MAX_MODE).map(Mode::from_raw),
+            "pulse" => Some(Mode::Pulse),
+            "flash" => Some(Mode::Flash),
+            _ => None,
+        }
+    }
+    /// Lowercase config/CLI name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Steady => "steady",
+            Mode::Off => "off",
+            Mode::Pulse => "pulse",
+            Mode::Flash => "flash",
+        }
+    }
+    /// Capitalized label for menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Steady => "Steady",
+            Mode::Off => "Off",
+            Mode::Pulse => "Pulse",
+            Mode::Flash => "Flash",
         }
     }
 }
 
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Mode::Pulse => write!(f, "pulse"),
-            Mode::Steady => write!(f, "steady"),
-            Mode::Off => write!(f, "off"),
-            Mode::Raw(n) => write!(f, "raw {n}"),
-        }
+        f.write_str(self.name())
     }
 }
 
@@ -243,9 +257,6 @@ impl Keyboard {
     }
 
     pub fn set_mode(&mut self, mode: Mode) -> Result<()> {
-        if mode.raw() > MAX_MODE {
-            return Err(Error::OutOfRange("mode", mode.raw(), MAX_MODE));
-        }
         self.write_byte(OFF_MODE, mode.raw())
     }
 
@@ -286,11 +297,13 @@ mod tests {
 
     #[test]
     fn mode_round_trip() {
-        for m in Mode::NAMED {
+        for m in Mode::ALL {
             assert_eq!(Mode::from_raw(m.raw()), m);
-            assert_eq!(Mode::parse(&m.to_string()), Some(m));
+            assert_eq!(Mode::parse(m.name()), Some(m));
         }
-        assert_eq!(Mode::parse("7"), Some(Mode::Raw(7)));
-        assert_eq!(Mode::parse("16"), None);
+        assert_eq!(Mode::parse("force"), Some(Mode::Steady));
+        assert_eq!(Mode::from_raw(7), Mode::Steady);
+        assert_eq!(Mode::parse("7"), None);
+        assert_eq!(Mode::parse("rainbow"), None);
     }
 }
