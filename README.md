@@ -129,6 +129,7 @@ More detail: [docs/DETAILS.md](docs/DETAILS.md).
 ## Fixed
 
 - **Off mode now turns the lights off (Nov 2026).** The off value used to be `0F`, which this keyboard just shows as steady, so Fn+O did the same thing as Fn+S. Testing on the keyboard showed `0B` is the real off value. Values `03`–`0A` and `FF` all stay steady. Fn+O, `onn-rgb mode off` and the tray/GUI Off now all work. The fix is in the v0.2 release AppImage.
+- **Speed limits per mode (Nov 2026).** Pulse speed now tops out at 9 and Flash at 3, in the GUI, the tray, Fn+arrows and the CLI. Switching modes lowers the speed if it's over the new mode's limit.
 
 ## Known issues
 

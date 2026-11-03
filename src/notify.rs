@@ -2,7 +2,7 @@
 //! Each notice replaces the previous one (replaces_id), so holding a combo
 //! doesn't stack popups.
 
-use crate::{Mode, Settings, MAX_BRIGHTNESS, MAX_SPEED};
+use crate::{Mode, Settings, MAX_BRIGHTNESS};
 
 /// Which setting a command was about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,10 +30,10 @@ pub fn text(kind: Kind, s: Settings) -> String {
         Kind::Speed => {
             let lim = match s.speed {
                 0 => " (slowest)",
-                MAX_SPEED => " (fastest)",
+                x if x >= s.mode.max_speed() => " (fastest)",
                 _ => "",
             };
-            format!("Speed {}/{MAX_SPEED}{lim}", s.speed)
+            format!("Speed {}/{}{lim}", s.speed, s.mode.max_speed())
         }
     }
 }

@@ -55,6 +55,15 @@ pub enum Mode {
 impl Mode {
     pub const ALL: [Mode; 4] = [Mode::Steady, Mode::Off, Mode::Pulse, Mode::Flash];
 
+    /// Highest usable speed for this mode (Pulse 9, Flash 3, else [`MAX_SPEED`]).
+    pub fn max_speed(self) -> u8 {
+        match self {
+            Mode::Pulse => 9,
+            Mode::Flash => 3,
+            _ => MAX_SPEED,
+        }
+    }
+
     /// Unknown raw values (old firmware/experiments) fall back to Steady.
     pub fn from_raw(v: u8) -> Mode {
         match v {
@@ -258,7 +267,12 @@ impl Keyboard {
     }
 
     pub fn set_mode(&mut self, mode: Mode) -> Result<()> {
-        self.write_byte(OFF_MODE, mode.raw())
+        self.write_byte(OFF_MODE, mode.raw())?;
+        let s = self.settings()?;
+        if s.speed > mode.max_speed() {
+            self.write_byte(OFF_SPEED, MAX_SPEED - mode.max_speed())?;
+        }
+        Ok(())
     }
 
     pub fn set_brightness(&mut self, level: u8) -> Result<()> {
@@ -273,6 +287,7 @@ impl Keyboard {
         if speed > MAX_SPEED {
             return Err(Error::OutOfRange("speed", speed, MAX_SPEED));
         }
+        let speed = speed.min(self.settings()?.mode.max_speed());
         self.write_byte(OFF_SPEED, MAX_SPEED - speed)
     }
 }

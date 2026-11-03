@@ -9,7 +9,7 @@
 
 use crate::actions::Action;
 use crate::daemon::{Cmd, Ctl};
-use crate::{Mode, Settings, MAX_BRIGHTNESS, MAX_SPEED};
+use crate::{Mode, Settings, MAX_BRIGHTNESS};
 use ksni::menu::*;
 use ksni::{Icon, MenuItem, ToolTip};
 use std::path::PathBuf;
@@ -137,7 +137,7 @@ impl OnnTray {
     fn lighting(&self) -> String {
         match (&self.settings, &self.error) {
             (_, Some(e)) => e.clone(),
-            (Some(s), None) => format!("{}, brightness {}/{MAX_BRIGHTNESS}, speed {}/{MAX_SPEED}", s.mode, s.brightness, s.speed),
+            (Some(s), None) => format!("{}, brightness {}/{MAX_BRIGHTNESS}, speed {}/{}", s.mode, s.brightness, s.speed, s.mode.max_speed()),
             (None, None) => "reading keyboard…".into(),
         }
     }
@@ -191,10 +191,10 @@ impl ksni::Tray for OnnTray {
         let speed = s.map_or("Speed".into(), |s| {
             let lim = match s.speed {
                 0 => " (slowest)",
-                MAX_SPEED => " (fastest)",
+                x if x >= s.mode.max_speed() => " (fastest)",
                 _ => "",
             };
-            format!("Speed {}/{MAX_SPEED}{lim}", s.speed)
+            format!("Speed {}/{}{lim}", s.speed, s.mode.max_speed())
         });
         let mut items: Vec<MenuItem<Self>> = vec![label(self.summary())];
         if !self.status.is_empty() {
@@ -221,7 +221,7 @@ impl ksni::Tray for OnnTray {
             label(speed),
             StandardItem {
                 label: "Faster".into(),
-                enabled: enabled && s.is_some_and(|s| s.speed < MAX_SPEED),
+                enabled: enabled && s.is_some_and(|s| s.speed < s.mode.max_speed()),
                 activate: Box::new(|t: &mut Self| t.send(Cmd::Act(Action::SpeedUp))),
                 ..Default::default()
             }

@@ -113,6 +113,7 @@ pub fn next(s: Settings, a: Action, toggle_to: Mode) -> Settings {
         Action::ModeFlash => n.mode = Mode::Flash,
         Action::ModeOff => n.mode = Mode::Off,
     }
+    n.speed = n.speed.min(n.mode.max_speed());
     n
 }
 
@@ -165,6 +166,9 @@ mod tests {
         assert_eq!(next(st(Mode::Flash, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Off);
         assert_eq!(next(st(Mode::Off, 3, 4), Action::CycleMode, Mode::Steady).mode, Mode::Steady);
         assert_eq!(next(st(Mode::Pulse, 3, 4), Action::SpeedUp, Mode::Steady).speed, 5);
+        assert_eq!(next(st(Mode::Pulse, 3, 9), Action::SpeedUp, Mode::Steady).speed, 9);
+        assert_eq!(next(st(Mode::Flash, 3, 3), Action::SpeedUp, Mode::Steady).speed, 3);
+        assert_eq!(next(st(Mode::Pulse, 3, 8), Action::ModeFlash, Mode::Steady).speed, 3);
         assert_eq!(next(st(Mode::Pulse, 3, 4), Action::ModeFlash, Mode::Steady).mode, Mode::Flash);
         assert_eq!(next(s, Action::Toggle, Mode::Steady).mode, Mode::Off);
         assert_eq!(next(st(Mode::Off, 3, 4), Action::Toggle, Mode::Pulse).mode, Mode::Pulse);

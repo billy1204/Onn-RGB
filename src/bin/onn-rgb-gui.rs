@@ -9,7 +9,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use onn_rgb::{config, Keyboard, Mode, Settings, MAX_BRIGHTNESS, MAX_SPEED};
+use onn_rgb::{config, Keyboard, Mode, Settings, MAX_BRIGHTNESS};
 
 struct App {
     kb: Option<Keyboard>,
@@ -97,6 +97,7 @@ impl eframe::App for App {
                     for m in Mode::ALL {
                         if ui.selectable_label(self.settings.mode == m, m.label()).clicked() {
                             self.settings.mode = m;
+                            self.settings.speed = self.settings.speed.min(m.max_speed());
                             self.apply(|kb| kb.set_mode(m));
                         }
                     }
@@ -112,11 +113,12 @@ impl eframe::App for App {
                 ui.end_row();
 
                 ui.label("Speed");
-                let mut s = self.settings.speed.min(MAX_SPEED);
-                let speed_enabled = self.settings.mode == Mode::Pulse;
+                let max = self.settings.mode.max_speed();
+                let mut s = self.settings.speed.min(max);
+                let speed_enabled = matches!(self.settings.mode, Mode::Pulse | Mode::Flash);
                 if ui
-                    .add_enabled(speed_enabled, egui::Slider::new(&mut s, 0..=MAX_SPEED).text("slow → fast"))
-                    .on_disabled_hover_text("Speed only affects Pulse (Flash has fixed timing)")
+                    .add_enabled(speed_enabled, egui::Slider::new(&mut s, 0..=max).text("slow → fast"))
+                    .on_disabled_hover_text("Speed only affects Pulse (0-9) and Flash (0-3)")
                     .changed()
                 {
                     self.settings.speed = s;
