@@ -43,7 +43,7 @@ pub const MAX_BRIGHTNESS: u8 = 3;
 /// Highest user-facing speed (0 = slowest). The firmware stores it inverted.
 pub const MAX_SPEED: u8 = 12;
 /// The keyboard's four lighting modes. Raw values: `00` pulse, `01` steady,
-/// `02` flash, `0F` off. Any other value read back is shown as Steady.
+/// `02` flash, `0B` off. Any other value read back is shown as Steady.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
     Steady,
@@ -60,7 +60,7 @@ impl Mode {
         match v {
             0 => Mode::Pulse,
             2 => Mode::Flash,
-            15 => Mode::Off,
+            11 => Mode::Off,
             _ => Mode::Steady,
         }
     }
@@ -69,7 +69,7 @@ impl Mode {
             Mode::Pulse => 0,
             Mode::Steady => 1,
             Mode::Flash => 2,
-            Mode::Off => 15,
+            Mode::Off => 11,
         }
     }
     /// Parse a mode name; "force" is an alias for steady.

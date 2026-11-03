@@ -58,7 +58,7 @@ report ID 4, 64-byte reports):
 | 8+ | data |
 
 Config offsets: `01` mode, `02` brightness, `03` speed (stored inverted).
-Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0F` off. Any other value read back is treated as steady.
+Mode values: `00` pulse, `01` steady, `02` flash (fixed timing), `0B` off. Any other value read back is treated as steady.
 
 Fn lighting shortcuts only work under Windows, where the vendor software
 handles them; under Linux those keys send media keys.
