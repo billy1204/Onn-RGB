@@ -124,8 +124,6 @@ The keyboard firmware does not act on Fn lighting combos itself. Under Windows t
 vendor software handles them; under Linux the Fn key arrives as `KEY_VOLUMEUP`
 on a separate input node, and the onn-rgb daemon turns Fn+key into lighting commands.
 
-More detail: [docs/DETAILS.md](docs/DETAILS.md).
-
 ## Disclaimer
 
 Not affiliated with onn., Walmart, or KWB. Reverse-engineered by hand; use at
