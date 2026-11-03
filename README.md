@@ -48,7 +48,7 @@ Log out and back in (or replug the keyboard) afterward.
 - `70` lets your user talk to the keyboard's lighting interface.
 - `71` lets the daemon read the Fn key.
 - `72` lets the daemon pass keys through, so Fn+letter doesn't also type the letter
-  (turn on "Block keys during Fn combos" in the tray).
+  (turn on "Block arrow keys during Fn combos" in the tray).
 
 ### From source
 
@@ -72,7 +72,9 @@ onn-rgb speed 6
 onn-rgb set --mode pulse --brightness 2 --speed 6
 onn-rgb cycle-mode            # steady -> pulse -> flash -> off
 onn-rgb toggle                # off / last mode
-onn-rgb brightness-up | brightness-down | speed-up | speed-down
+onn-rgb mode-steady | mode-off | mode-pulse | mode-flash
+onn-rgb brightness up|down
+onn-rgb speed up|down
 onn-rgb daemon                # tray + Fn keys (started automatically by the GUI)
 onn-rgb listen-keys           # show raw key events, for debugging
 onn-rgb config                # print config path
