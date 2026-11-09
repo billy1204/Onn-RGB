@@ -255,7 +255,7 @@ fn keycaps(ui: &mut Ui, s: &Settings) {
         }
         Mode::Flash => {
             ui.ctx().request_repaint_after(Duration::from_millis(40));
-            let hz = 0.5 + 1.3 * speed;
+            let hz = 0.4 + 1.0 * speed;
             if (t * hz).fract() < 0.5 { level } else { 0.0 }
         }
     };
