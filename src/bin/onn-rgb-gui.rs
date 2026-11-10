@@ -399,11 +399,6 @@ fn header(ui: &mut Ui, connected: bool, appearance_open: bool) -> bool {
         paint_keyboard(ui.painter(), r, Color32::from_gray(190), 1.5, None);
         ui.add_space(6.0);
         ui.label(RichText::new("onn Keyboard Lighting").size(17.0).color(TEXT).strong());
-        ui.label(
-            RichText::new(format!("v{}.{}", env!("CARGO_PKG_VERSION_MAJOR"), env!("CARGO_PKG_VERSION_MINOR")))
-                .size(12.5)
-                .color(MUTED),
-        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             clicked = appearance_button(ui, appearance_open).clicked();
             if connected {
