@@ -6,7 +6,7 @@
 //!   signal pipe. The only timeouts are one-shot: the Fn window and a short
 //!   delay after a hotplug event.
 //! - hid worker: owns all HID I/O (so the input loop never blocks on the
-//!   keyboard) and caches the current settings.
+//!   keyboard) and re-reads the settings before each change.
 //! - tray (ksni, current-thread tokio): idle on D-Bus.
 
 use crate::actions::{self, Action};
@@ -126,10 +126,8 @@ fn worker(rx: Receiver<Cmd>, notify: Notify, notices: Arc<AtomicBool>) {
     for cmd in rx {
         let kind = kind_of(&cmd);
         let r = Keyboard::open().and_then(|mut kb| {
-            let cur = match (&cmd, cached) {
-                (Cmd::Refresh, _) | (_, None) => kb.settings()?,
-                (_, Some(s)) => s,
-            };
+            // Always re-read: the GUI or CLI may have changed the keyboard since.
+            let cur = kb.settings()?;
             match cmd {
                 Cmd::Refresh => Ok(cur),
                 Cmd::Act(a) => actions::apply_from(&mut kb, cur, a),

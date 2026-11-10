@@ -239,8 +239,13 @@ fn set_modes(text: &str, keys: &[(Mode, u16)]) -> String {
     }
     let mut sec = vec!["[fn.modes]".to_string()];
     for m in Mode::ALL {
-        let v = keys.iter().find(|(o, _)| *o == m).map(|(_, k)| key_name(*k)).unwrap_or_default();
-        sec.push(format!("{} = \"{v}\"", m.name()));
+        // Keys without a name in hotkeys::NAMES are written as numbers.
+        let v = match keys.iter().find(|(o, _)| *o == m) {
+            Some(&(_, k)) if key_code(&key_name(k)) == Some(k) => format!("\"{}\"", key_name(k)),
+            Some(&(_, k)) => k.to_string(),
+            None => "\"\"".into(),
+        };
+        sec.push(format!("{} = {v}", m.name()));
     }
     match at {
         Some(i) => {
@@ -434,4 +439,12 @@ mod tests {
         assert_eq!(s.matches("theme =").count(), 1);
     }
 
+    #[test]
+    fn set_modes_keeps_unnamed_key_numbers() {
+        let s = set_modes(TEMPLATE, &[(Mode::Flash, 200), (Mode::Steady, 31)]);
+        assert!(s.contains("flash = 200\n") && s.contains("steady = \"KEY_S\"\n") && s.contains("off = \"\"\n"));
+        let (c, w) = parse(&s).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert!(c.fn_cfg.map.contains(&(200, Action::ModeFlash)));
+    }
 }
