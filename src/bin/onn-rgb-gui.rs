@@ -11,15 +11,12 @@ use std::io::Read;
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use onn_rgb::{config, Keyboard, Mode, Settings, MAX_BRIGHTNESS};
 
 // ---- Look and feel (visual only; no keyboard I/O below this line until `App`) ----
 
-const ACCENT: Color32 = Color32::from_rgb(56, 189, 248);
-const ACCENT_BG: Color32 = Color32::from_rgb(14, 58, 82);
-const ACCENT_BAND: Color32 = Color32::from_rgb(9, 42, 60);
 const BG: Color32 = Color32::from_rgb(22, 22, 25);
 const CARD: Color32 = Color32::from_rgb(33, 33, 37);
 const CARD_HOVER: Color32 = Color32::from_rgb(43, 43, 49);
@@ -36,6 +33,48 @@ const KEY_WARM: Color32 = Color32::from_rgb(246, 240, 228);
 const KEY_AMBER: Color32 = Color32::from_rgb(242, 150, 58);
 const KEY_UNLIT: Color32 = Color32::from_rgb(70, 68, 66);
 
+/// Color themes (Appearance menu): the accent used by tiles, sliders and buttons.
+struct Theme {
+    name: &'static str,
+    label: &'static str,
+    accent: Color32,
+}
+
+const THEMES: [Theme; 5] = [
+    Theme { name: "sky", label: "Sky", accent: Color32::from_rgb(56, 189, 248) },
+    Theme { name: "violet", label: "Violet", accent: Color32::from_rgb(167, 139, 250) },
+    Theme { name: "emerald", label: "Emerald", accent: Color32::from_rgb(52, 211, 153) },
+    Theme { name: "amber", label: "Amber", accent: Color32::from_rgb(251, 191, 36) },
+    Theme { name: "rose", label: "Rose", accent: Color32::from_rgb(251, 113, 133) },
+];
+
+/// Index into THEMES, and whether buttons animate (both from `[gui]` in the config).
+static THEME: AtomicUsize = AtomicUsize::new(0);
+static ANIMATE: AtomicBool = AtomicBool::new(true);
+
+fn accent() -> Color32 {
+    THEMES[THEME.load(Ordering::Relaxed)].accent
+}
+
+/// Selected-tile fill and its lower band: the accent mixed into near-black.
+fn accent_bg() -> Color32 {
+    lerp_color(Color32::from_rgb(10, 10, 12), accent(), 0.24)
+}
+
+fn accent_band() -> Color32 {
+    lerp_color(Color32::from_rgb(10, 10, 12), accent(), 0.15)
+}
+
+fn animating() -> bool {
+    ANIMATE.load(Ordering::Relaxed)
+}
+
+/// 0..1 easing toward `on` over `secs`; jumps straight there with animations off.
+fn anim(ui: &Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    let secs = if animating() { secs } else { 0.0 };
+    ui.ctx().animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::cubic_out)
+}
+
 const LABEL_W: f32 = 96.0;
 const VALUE_W: f32 = 34.0;
 
@@ -45,9 +84,9 @@ fn setup_style(ctx: &egui::Context) {
     v.window_fill = CARD;
     v.extreme_bg_color = Color32::from_rgb(17, 17, 19);
     v.faint_bg_color = CARD;
-    v.selection.bg_fill = ACCENT;
+    v.selection.bg_fill = accent();
     v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
-    v.hyperlink_color = ACCENT;
+    v.hyperlink_color = accent();
     v.override_text_color = None;
     let r = CornerRadius::same(6);
     let w = &mut v.widgets;
@@ -64,16 +103,18 @@ fn setup_style(ctx: &egui::Context) {
     w.inactive.fg_stroke = Stroke::new(1.0, TEXT);
     w.hovered.bg_fill = Color32::from_rgb(96, 96, 106);
     w.hovered.weak_bg_fill = Color32::from_rgb(52, 52, 60);
-    w.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
+    w.hovered.bg_stroke = Stroke::new(1.0, accent());
     w.hovered.fg_stroke = Stroke::new(1.5, Color32::WHITE);
-    w.active.bg_fill = ACCENT;
-    w.active.weak_bg_fill = ACCENT_BG;
-    w.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    w.active.bg_fill = accent();
+    w.active.weak_bg_fill = accent_bg();
+    w.active.bg_stroke = Stroke::new(1.0, accent());
     w.active.fg_stroke = Stroke::new(1.5, Color32::WHITE);
     w.open.weak_bg_fill = Color32::from_rgb(42, 42, 48);
-    w.open.bg_stroke = Stroke::new(1.0, ACCENT);
+    w.open.bg_stroke = Stroke::new(1.0, accent());
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
+        // Also drives the Appearance menu's open/close slide.
+        s.animation_time = if animating() { 1.0 / 12.0 } else { 0.0 };
         s.spacing.item_spacing = vec2(8.0, 8.0);
         s.spacing.button_padding = vec2(16.0, 6.0);
         s.spacing.interact_size.y = 26.0;
@@ -99,28 +140,39 @@ fn card() -> egui::Frame {
         .inner_margin(Margin::same(12))
 }
 
-/// Small keyboard glyph (header and Steady tile).
-fn paint_keyboard(p: &Painter, r: Rect, c: Color32, width: f32) {
+/// Small keyboard glyph (header and Steady tile). `wave` (seconds) lights the
+/// keys in a sweep, for the hover animation.
+fn paint_keyboard(p: &Painter, r: Rect, c: Color32, width: f32, wave: Option<f32>) {
     p.rect_stroke(r, CornerRadius::same(4), Stroke::new(width, c), StrokeKind::Inside);
     let inner = r.shrink2(vec2(r.width() * 0.14, r.height() * 0.2));
     let cols = 5;
     let kw = inner.width() / (cols as f32 * 1.6 - 0.6);
     let kh = inner.height() / 4.2;
+    let key_c = |i: f32| match wave {
+        Some(t) => c.gamma_multiply(0.45 + 0.55 * (0.5 + 0.5 * (t * 5.0 - i * 0.9).sin())),
+        None => c,
+    };
     for row in 0..2 {
         for col in 0..cols {
             let x = inner.left() + col as f32 * kw * 1.6;
             let y = inner.top() + row as f32 * kh * 1.6;
-            p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(kw, kh)), CornerRadius::same(1), c);
+            let kc = key_c(col as f32 + row as f32 * 0.5);
+            p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(kw, kh)), CornerRadius::same(1), kc);
         }
     }
     let y = inner.top() + 2.0 * kh * 1.6;
     let bar = Rect::from_min_max(pos2(inner.left() + kw * 1.6, y), pos2(inner.right() - kw * 1.6, y + kh));
-    p.rect_filled(bar, CornerRadius::same(1), c);
+    p.rect_filled(bar, CornerRadius::same(1), key_c(2.0));
 }
 
-fn paint_power(p: &Painter, r: Rect, c: Color32) {
+/// Power glyph; `glow` (seconds) adds a soft breathing halo.
+fn paint_power(p: &Painter, r: Rect, c: Color32, glow: Option<f32>) {
     let center = r.center() + vec2(0.0, 2.0);
     let rad = r.height().min(r.width()) * 0.46;
+    if let Some(t) = glow {
+        let a = 0.5 + 0.5 * (t * 4.0).sin();
+        p.circle_filled(center, rad + 4.0 + 2.0 * a, c.gamma_multiply(0.10 + 0.10 * a));
+    }
     let gap = 38f32.to_radians();
     let top = -std::f32::consts::FRAC_PI_2;
     let (a0, a1) = (top + gap, top + std::f32::consts::TAU - gap);
@@ -139,7 +191,8 @@ fn paint_power(p: &Painter, r: Rect, c: Color32) {
 }
 
 /// Dot fields: Pulse fades in evenly, Flash is a streak that grows to the right.
-fn paint_dots(p: &Painter, r: Rect, c: Color32, flash: bool) {
+/// `phase` (seconds) makes Pulse breathe in a wave and Flash sweep a bright head.
+fn paint_dots(p: &Painter, r: Rect, c: Color32, flash: bool, phase: Option<f32>) {
     let cols = 11;
     let rows = 3;
     let dx = r.width() / (cols - 1) as f32;
@@ -147,13 +200,25 @@ fn paint_dots(p: &Painter, r: Rect, c: Color32, flash: bool) {
     for row in 0..rows {
         for col in 0..cols {
             let t = col as f32 / (cols - 1) as f32;
-            let (alpha, size) = if flash {
+            let (mut alpha, mut size) = if flash {
                 let rise = t.powf(1.6);
                 (0.15 + 0.85 * rise, 0.8 + 2.0 * rise)
             } else {
                 let bell = 1.0 - (t - 0.62).abs() * 1.5;
                 (bell.clamp(0.12, 1.0), 1.0 + 1.3 * bell.clamp(0.0, 1.0))
             };
+            if let Some(ph) = phase {
+                if flash {
+                    let head = (ph * 1.4).fract() * 1.3 - 0.15;
+                    let near = (1.0 - (t - head).abs() * 6.0).max(0.0);
+                    alpha = (alpha * 0.5 + near).min(1.0);
+                    size += near * 0.8;
+                } else {
+                    let w = 0.5 + 0.5 * (ph * 4.0 - t * 5.0).sin();
+                    alpha *= 0.35 + 0.65 * w;
+                    size *= 0.85 + 0.3 * w;
+                }
+            }
             let mut y = r.top() + dy * (row as f32 + 1.0);
             if flash {
                 y += (row as f32 - 1.0) * (1.0 - t) * 2.5;
@@ -164,40 +229,153 @@ fn paint_dots(p: &Painter, r: Rect, c: Color32, flash: bool) {
     }
 }
 
+/// Shrinks `rect` while the pointer is held on it (a small "press" squish).
+fn pressed_rect(ui: &Ui, resp: &Response, rect: Rect, depth: f32) -> Rect {
+    let t = anim(ui, resp.id.with("press"), resp.is_pointer_button_down_on(), 0.06);
+    rect.shrink(depth * t)
+}
+
 fn mode_tile(ui: &mut Ui, mode: Mode, selected: bool, size: Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if ui.is_rect_visible(rect) {
+        let hov = anim(ui, resp.id.with("hover"), resp.hovered(), 0.15);
+        let sel = anim(ui, resp.id.with("sel"), selected, 0.25);
+        // Pop: grows a little while becoming selected, then settles.
+        let pop = if selected && sel < 1.0 { (sel * std::f32::consts::PI).sin() * 3.0 } else { 0.0 };
+        let rect = pressed_rect(ui, &resp, rect, 3.0).expand(pop);
         let p = ui.painter();
-        let (fill, stroke) = if selected {
-            (ACCENT_BG, Stroke::new(1.5, ACCENT))
-        } else if resp.hovered() {
-            (CARD_HOVER, Stroke::new(1.0, BORDER_HI))
-        } else {
-            (CARD, Stroke::new(1.0, BORDER))
-        };
+        let fill = lerp_color(lerp_color(CARD, CARD_HOVER, hov), accent_bg(), sel);
+        let stroke_c = lerp_color(lerp_color(BORDER, BORDER_HI, hov), accent(), sel);
+        if animating() && hov > 0.0 {
+            p.rect_filled(rect.expand(3.0 * hov), CornerRadius::same(13), accent().gamma_multiply(0.08 * hov));
+        }
         p.rect_filled(rect, CornerRadius::same(10), fill);
         let split = rect.top() + rect.height() * 0.64;
-        if selected {
+        if sel > 0.0 {
             let band = Rect::from_min_max(pos2(rect.left(), split), rect.max);
-            p.rect_filled(band, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, ACCENT_BAND);
+            p.rect_filled(band, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, lerp_color(fill, accent_band(), sel));
         }
-        p.rect_stroke(rect, CornerRadius::same(10), stroke, StrokeKind::Inside);
-        let icon_c = if selected { ACCENT } else { Color32::from_gray(205) };
-        let ic = pos2(rect.center().x, rect.top() + rect.height() * 0.34);
+        p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0 + 0.5 * sel, stroke_c), StrokeKind::Inside);
+        let icon_c = lerp_color(Color32::from_gray(205), accent(), sel.max(0.4 * hov));
+        // Icons play while hovered, and lift slightly.
+        let live = (animating() && resp.hovered()).then(|| {
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
+            ui.input(|i| i.time) as f32
+        });
+        let ic = pos2(rect.center().x, rect.top() + rect.height() * 0.34 - 2.0 * hov);
         match mode {
-            Mode::Steady => paint_keyboard(p, Rect::from_center_size(ic, vec2(42.0, 26.0)), icon_c, 2.0),
-            Mode::Off => paint_power(p, Rect::from_center_size(ic, vec2(32.0, 32.0)), icon_c),
-            Mode::Pulse => paint_dots(p, Rect::from_center_size(ic, vec2(50.0, 22.0)), icon_c, false),
-            Mode::Flash => paint_dots(p, Rect::from_center_size(ic, vec2(50.0, 22.0)), icon_c, true),
+            Mode::Steady => paint_keyboard(p, Rect::from_center_size(ic, vec2(42.0, 26.0)), icon_c, 2.0, live),
+            Mode::Off => paint_power(p, Rect::from_center_size(ic, vec2(32.0, 32.0)), icon_c, live),
+            Mode::Pulse => paint_dots(p, Rect::from_center_size(ic, vec2(50.0, 22.0)), icon_c, false, live),
+            Mode::Flash => paint_dots(p, Rect::from_center_size(ic, vec2(50.0, 22.0)), icon_c, true, live),
         }
         p.text(
             pos2(rect.center().x, rect.top() + rect.height() * 0.82),
             Align2::CENTER_CENTER,
             mode.label(),
             FontId::proportional(15.0),
-            if selected { ACCENT } else { TEXT },
+            lerp_color(TEXT, accent(), sel),
         );
+    }
+    resp
+}
+
+/// Text button with an animated hover glow and press. `primary` = accent fill.
+fn button(ui: &mut Ui, text: &str, primary: bool, min_w: f32) -> Response {
+    let fg = if primary { Color32::BLACK } else { TEXT };
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(14.5), fg);
+    let size = vec2((galley.size().x + 32.0).max(min_w), 30.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if ui.is_rect_visible(rect) {
+        let hov = anim(ui, resp.id.with("hover"), resp.hovered(), 0.14);
+        let rect = pressed_rect(ui, &resp, rect, 1.5);
+        let p = ui.painter();
+        if animating() && hov > 0.0 {
+            p.rect_filled(rect.expand(3.0 * hov), CornerRadius::same(9), accent().gamma_multiply(0.14 * hov));
+        }
+        let (fill, stroke) = if primary {
+            (lerp_color(accent(), Color32::WHITE, 0.18 * hov), accent())
+        } else {
+            (lerp_color(Color32::from_rgb(42, 42, 48), Color32::from_rgb(52, 52, 60), hov), lerp_color(BORDER, accent(), hov))
+        };
+        p.rect_filled(rect, CornerRadius::same(6), fill);
+        p.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, stroke), StrokeKind::Inside);
+        p.galley(rect.center() - galley.size() / 2.0, galley, fg);
+    }
+    resp
+}
+
+/// On/off switch; the knob slides (instantly with animations off).
+fn switch(ui: &mut Ui, on: &mut bool) -> Response {
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(42.0, 24.0), Sense::click());
+    let resp_hover = resp.hovered();
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let t = anim(ui, resp.id, *on, 0.18);
+    let hov = anim(ui, resp.id.with("hover"), resp_hover, 0.12);
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(255), lerp_color(Color32::from_rgb(64, 64, 72), accent(), t));
+    p.rect_stroke(rect, CornerRadius::same(255), Stroke::new(1.0, lerp_color(BORDER_HI, accent(), t.max(hov))), StrokeKind::Inside);
+    let r = rect.height() / 2.0 - 3.0;
+    let x = egui::lerp((rect.left() + r + 3.0)..=(rect.right() - r - 3.0), t);
+    p.circle_filled(pos2(x, rect.center().y + 1.0), r + 0.5, Color32::from_black_alpha(60));
+    p.circle_filled(pos2(x, rect.center().y), r + hov, Color32::WHITE);
+    resp
+}
+
+/// Round color swatch for a theme; grows on hover, ringed when selected.
+fn swatch(ui: &mut Ui, theme: &Theme, selected: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(58.0, 54.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let hov = anim(ui, resp.id.with("hover"), resp.hovered(), 0.14);
+    let sel = anim(ui, resp.id.with("sel"), selected, 0.2);
+    let press = anim(ui, resp.id.with("press"), resp.is_pointer_button_down_on(), 0.06);
+    let p = ui.painter();
+    let c = pos2(rect.center().x, rect.top() + 16.0);
+    let rad = 11.0 + 2.0 * hov - 1.5 * press;
+    if sel > 0.0 {
+        p.circle_stroke(c, rad + 4.0, Stroke::new(2.0, theme.accent.gamma_multiply(sel)));
+    }
+    p.circle_filled(c, rad, theme.accent);
+    if sel > 0.0 {
+        // Check mark
+        let s = 4.5 * sel;
+        let dark = Color32::from_black_alpha((200.0 * sel) as u8);
+        p.line_segment([c + vec2(-s, 0.0), c + vec2(-s * 0.3, s * 0.7)], Stroke::new(2.0, dark));
+        p.line_segment([c + vec2(-s * 0.3, s * 0.7), c + vec2(s, -s * 0.7)], Stroke::new(2.0, dark));
+    }
+    p.text(
+        pos2(rect.center().x, rect.bottom() - 8.0),
+        Align2::CENTER_CENTER,
+        theme.label,
+        FontId::proportional(12.0),
+        lerp_color(MUTED, TEXT, sel.max(hov)),
+    );
+    resp
+}
+
+/// Header button that opens the Appearance menu: three overlapping theme dots
+/// that spread apart on hover.
+fn appearance_button(ui: &mut Ui, open: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 28.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Appearance");
+    let hov = anim(ui, resp.id.with("hover"), resp.hovered(), 0.14);
+    let o = anim(ui, resp.id.with("open"), open, 0.18);
+    let rect = pressed_rect(ui, &resp, rect, 1.5);
+    let p = ui.painter();
+    let fill = lerp_color(lerp_color(Color32::from_rgb(42, 42, 48), Color32::from_rgb(52, 52, 60), hov), accent_bg(), o);
+    p.rect_filled(rect, CornerRadius::same(7), fill);
+    p.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, lerp_color(BORDER, accent(), hov.max(o))), StrokeKind::Inside);
+    let spread = 4.5 + 1.5 * hov;
+    let turn = if animating() { o * std::f32::consts::TAU / 3.0 } else { 0.0 };
+    for (i, t) in [&THEMES[1], &THEMES[0], &THEMES[4]].iter().enumerate() {
+        let a = turn + i as f32 * std::f32::consts::TAU / 3.0 - std::f32::consts::FRAC_PI_2;
+        p.circle_filled(rect.center() + vec2(a.cos(), a.sin()) * spread, 4.0, t.accent);
     }
     resp
 }
@@ -213,10 +391,12 @@ fn pill(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) {
     p.galley(rect.center() - galley.size() / 2.0, galley, fg);
 }
 
-fn header(ui: &mut Ui, connected: bool) {
+/// Title row. Returns true when the Appearance button was clicked.
+fn header(ui: &mut Ui, connected: bool, appearance_open: bool) -> bool {
+    let mut clicked = false;
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(34.0, 26.0), Sense::hover());
-        paint_keyboard(ui.painter(), r, Color32::from_gray(190), 1.5);
+        paint_keyboard(ui.painter(), r, Color32::from_gray(190), 1.5, None);
         ui.add_space(6.0);
         ui.label(RichText::new("onn Keyboard Lighting").size(17.0).color(TEXT).strong());
         ui.label(
@@ -225,6 +405,7 @@ fn header(ui: &mut Ui, connected: bool) {
                 .color(MUTED),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            clicked = appearance_button(ui, appearance_open).clicked();
             if connected {
                 pill(ui, "Connected", OK_GREEN, OK_BG);
             } else {
@@ -236,6 +417,7 @@ fn header(ui: &mut Ui, connected: bool) {
     let r = ui.available_rect_before_wrap();
     ui.painter().hline(r.x_range(), r.top(), Stroke::new(1.0, BORDER));
     ui.add_space(12.0);
+    clicked
 }
 
 /// Decorative keycaps 1-0. Their glow follows mode and brightness; it is not a
@@ -312,18 +494,26 @@ struct App {
     /// Fn mode keys being edited (None = unbound).
     mode_keys: [(Mode, Option<u16>); 4],
     keys_msg: String,
+    animations: bool,
+    /// Error from saving the Appearance settings, if any.
+    appearance_msg: String,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(ctx: &egui::Context) -> Self {
+        let (c, _) = config::load();
+        THEME.store(THEMES.iter().position(|t| t.name == c.theme).unwrap_or(0), Ordering::Relaxed);
+        ANIMATE.store(c.animations, Ordering::Relaxed);
+        setup_style(ctx);
         let mut app = App {
             kb: None,
             settings: Settings { mode: Mode::Steady, brightness: MAX_BRIGHTNESS, speed: 0 },
             message: String::new(),
             mode_keys: Mode::ALL.map(|m| (m, None)),
             keys_msg: String::new(),
+            animations: c.animations,
+            appearance_msg: String::new(),
         };
-        let (c, _) = config::load();
         for (m, k) in c.mode_keys {
             if let Some(slot) = app.mode_keys.iter_mut().find(|(o, _)| *o == m) {
                 slot.1 = Some(k);
@@ -383,7 +573,18 @@ impl eframe::App for App {
 impl App {
     /// Everything inside the window (scrolls if the screen is too short).
     fn body(&mut self, ui: &mut Ui) {
-        header(ui, self.kb.is_some());
+        let mut menu = egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            egui::Id::new("appearance"),
+            false,
+        );
+        if header(ui, self.kb.is_some(), menu.is_open()) {
+            menu.toggle(ui);
+        }
+        menu.show_body_unindented(ui, |ui| {
+            self.appearance(ui);
+            ui.add_space(12.0);
+        });
 
         if self.kb.is_none() {
             card().show(ui, |ui| {
@@ -391,16 +592,13 @@ impl App {
                 ui.vertical_centered(|ui| {
                     ui.add_space(10.0);
                     let (r, _) = ui.allocate_exact_size(vec2(56.0, 36.0), Sense::hover());
-                    paint_keyboard(ui.painter(), r, MUTED, 2.0);
+                    paint_keyboard(ui.painter(), r, MUTED, 2.0, None);
                     ui.add_space(8.0);
                     ui.label(RichText::new("Keyboard not available").size(16.0).color(TEXT).strong());
                     ui.add_space(2.0);
                     ui.label(RichText::new(&self.message).color(ERR_RED));
                     ui.add_space(10.0);
-                    let retry = egui::Button::new(RichText::new("Retry").color(Color32::BLACK).strong())
-                        .fill(ACCENT)
-                        .min_size(vec2(110.0, 30.0));
-                    if ui.add(retry).clicked() {
+                    if button(ui, "Retry", true, 110.0).clicked() {
                         self.connect();
                     }
                     ui.add_space(10.0);
@@ -519,7 +717,7 @@ impl App {
         ui.add_space(12.0);
 
         ui.horizontal(|ui| {
-            if ui.button("Save").on_hover_text("Save the Fn mode keys").clicked() {
+            if button(ui, "Save", true, 0.0).on_hover_text("Save the Fn mode keys").clicked() {
                 let keys: Vec<(Mode, u16)> = self.mode_keys.iter().filter_map(|(m, k)| k.map(|k| (*m, k))).collect();
                 let conflict = keys.iter().find_map(|&(m, k)| mode_key_conflict(&keys, m, k));
                 self.keys_msg = match conflict {
@@ -530,7 +728,7 @@ impl App {
                     },
                 };
             }
-            if ui.button("Reload").on_hover_text("Re-read the keyboard's current settings").clicked() {
+            if button(ui, "Reload", false, 0.0).on_hover_text("Re-read the keyboard's current settings").clicked() {
                 self.reload();
             }
         });
@@ -539,6 +737,54 @@ impl App {
             ui.label(RichText::new(&self.keys_msg).color(c).size(12.5));
         }
         ui.label(RichText::new(&self.message).color(MUTED).size(12.0));
+    }
+
+    /// The Appearance menu: animated-buttons switch and color themes.
+    fn appearance(&mut self, ui: &mut Ui) {
+        card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new("Appearance").color(TEXT).size(15.0).strong());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(RichText::new("Animated buttons").color(TEXT));
+                    ui.label(RichText::new("Hover glow, press and selection effects").color(MUTED).size(12.5));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if switch(ui, &mut self.animations).changed() {
+                        ANIMATE.store(self.animations, Ordering::Relaxed);
+                        setup_style(ui.ctx());
+                        self.appearance_msg = config::save_animations(self.animations)
+                            .err()
+                            .map(|e| format!("Not saved: {e}"))
+                            .unwrap_or_default();
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            let r = ui.available_rect_before_wrap();
+            ui.painter().hline(r.x_range(), r.top(), Stroke::new(1.0, BORDER));
+            ui.add_space(8.0);
+            ui.label(RichText::new("Theme").color(TEXT));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                let cur = THEME.load(Ordering::Relaxed);
+                for (i, t) in THEMES.iter().enumerate() {
+                    if swatch(ui, t, i == cur).clicked() && i != cur {
+                        THEME.store(i, Ordering::Relaxed);
+                        setup_style(ui.ctx());
+                        self.appearance_msg = config::save_theme(t.name)
+                            .err()
+                            .map(|e| format!("Not saved: {e}"))
+                            .unwrap_or_default();
+                    }
+                }
+            });
+            if !self.appearance_msg.is_empty() {
+                ui.label(RichText::new(&self.appearance_msg).color(ERR_RED).size(12.5));
+            }
+        });
     }
 }
 
@@ -661,8 +907,7 @@ fn main() -> eframe::Result {
                 let ctx = cc.egui_ctx.clone();
                 std::thread::spawn(move || listen(l, ctx));
             }
-            setup_style(&cc.egui_ctx);
-            Ok(Box::new(App::new()))
+            Ok(Box::new(App::new(&cc.egui_ctx)))
         }),
     );
     let _ = std::fs::remove_file(&sock);

@@ -61,6 +61,12 @@ steady = "KEY_S"
 off = "KEY_O"
 pulse = "KEY_P"
 flash = "KEY_F"
+
+# Look of the GUI (also set from its Appearance menu).
+[gui]
+animations = true
+# sky, violet, emerald, amber or rose
+theme = "sky"
 "#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +80,10 @@ pub struct Config {
     pub mode_keys: Vec<(Mode, u16)>,
     pub grab: bool,
     pub block_combo_keys: bool,
+    /// GUI: animated buttons on/off.
+    pub animations: bool,
+    /// GUI: color theme name ("" = default).
+    pub theme: String,
 }
 
 impl Default for Config {
@@ -87,6 +97,8 @@ impl Default for Config {
             mode_keys: DEFAULT_MODE_KEYS.to_vec(),
             grab: true,
             block_combo_keys: false,
+            animations: true,
+            theme: "sky".into(),
         }
     }
 }
@@ -132,6 +144,14 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
         }
         if let Some(b) = t.get("notices").and_then(|v| v.as_bool()) {
             c.notices = b;
+        }
+    }
+    if let Some(g) = table.get("gui").and_then(|v| v.as_table()) {
+        if let Some(b) = g.get("animations").and_then(|v| v.as_bool()) {
+            c.animations = b;
+        }
+        if let Some(t) = g.get("theme").and_then(|v| v.as_str()) {
+            c.theme = t.to_string();
         }
     }
     if let Some(f) = table.get("fn").and_then(|v| v.as_table()) {
@@ -246,19 +266,38 @@ pub fn save_notices(on: bool) -> std::io::Result<()> {
     save_bool("tray", &["notices"], on)
 }
 
+/// Persist `[gui] animations` (from the GUI's Appearance menu).
+pub fn save_animations(on: bool) -> std::io::Result<()> {
+    save_bool("gui", &["animations"], on)
+}
+
+/// Persist `[gui] theme` (from the GUI's Appearance menu).
+pub fn save_theme(name: &str) -> std::io::Result<()> {
+    save_value("gui", &["theme"], &format!("{name:?}"))
+}
+
 fn save_bool(section: &str, keys: &[&str], on: bool) -> std::io::Result<()> {
+    save_value(section, keys, &on.to_string())
+}
+
+fn save_value(section: &str, keys: &[&str], value: &str) -> std::io::Result<()> {
     let p = path().ok_or_else(|| std::io::Error::other("HOME not set"))?;
     let text = fs::read_to_string(&p).unwrap_or_else(|_| TEMPLATE.to_string());
-    let s = set_bool(&text, section, keys, on);
+    let s = set_value(&text, section, keys, value);
     if let Some(d) = p.parent() {
         fs::create_dir_all(d)?;
     }
     fs::write(p, s)
 }
 
-/// Set `keys[0] = on` inside `[section]`, replacing an existing line.
+#[cfg(test)]
 fn set_bool(text: &str, section: &str, keys: &[&str], on: bool) -> String {
-    let line = format!("{} = {on}", keys[0]);
+    set_value(text, section, keys, &on.to_string())
+}
+
+/// Set `keys[0] = value` inside `[section]`, replacing an existing line.
+fn set_value(text: &str, section: &str, keys: &[&str], value: &str) -> String {
+    let line = format!("{} = {value}", keys[0]);
     let header = format!("[{section}]");
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -382,4 +421,17 @@ mod tests {
         assert!(s2.starts_with("[tray]\nnotices = true\n\n[fn.modes]\nsteady = \"KEY_F1\"\n"));
         assert!(save_mode_keys(&[(Mode::Off, 105)]).is_err());
     }
+
+    #[test]
+    fn gui_section() {
+        let (c, _) = parse(TEMPLATE).unwrap();
+        assert!(c.animations && c.theme == "sky");
+        let s = set_value(TEMPLATE, "gui", &["theme"], "\"rose\"");
+        let s = set_value(&s, "gui", &["animations"], "false");
+        let (c, w) = parse(&s).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert!(!c.animations && c.theme == "rose");
+        assert_eq!(s.matches("theme =").count(), 1);
+    }
+
 }
